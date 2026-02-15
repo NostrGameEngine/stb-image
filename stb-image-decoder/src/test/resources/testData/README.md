@@ -1,0 +1,1 @@
+This folder contains some generated test images and the [test images from StbSharp](https://github.com/StbSharp/TestImages).

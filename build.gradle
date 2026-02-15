@@ -1,0 +1,44 @@
+/*
+ * stb_image Java - Pure Java implementation of stb_image.h
+ * Designed for jMonkeyEngine and TeaVM
+ */
+
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+allprojects {
+    group = 'com.stb'
+    version = '1.0.0'
+
+    repositories {
+        mavenCentral()
+    }
+}
+
+subprojects {
+    apply plugin: 'java-library'
+    apply plugin: 'maven-publish'
+
+    java {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    tasks.withType(JavaCompile) {
+        options.encoding = 'UTF-8'
+    }
+
+    test {
+        useJUnitPlatform()
+    }
+
+    publishing {
+        publications {
+            mavenJava(MavenPublication) {
+                from components.java
+            }
+        }
+    }
+}

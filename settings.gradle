@@ -1,0 +1,3 @@
+rootProject.name = 'stb_image'
+
+include 'stb-image-decoder'

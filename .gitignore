@@ -1,0 +1,11 @@
+*.class
+build
+bin
+./stb
+.gradle
+.claude
+trash
+stb-image-decoder/src/test/resources/testData/expected/
+stb-image-decoder/src/test/resources/testData/index.txt
+.project
+.settings
