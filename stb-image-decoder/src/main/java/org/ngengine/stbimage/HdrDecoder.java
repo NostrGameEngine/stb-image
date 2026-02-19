@@ -35,10 +35,7 @@ public class HdrDecoder implements StbDecoder {
         // Check for #?RADIANCE or #?RGBE
         byte[] sig = new byte[10];
         buffer.get(sig);
-        for(int i=0;i<sig.length;i++) {
-            System.out.printf("%02X ", sig[i]);
 
-        }
         return (sig[0] == '#' && sig[1] == '?') &&
                 ((sig[2] == 'R' && sig[3] == 'A' && sig[4] == 'D' && sig[5] == 'I') ||
                 (sig[2] == 'R' && sig[3] == 'G' && sig[4] == 'B' && sig[5] == 'E'));
@@ -60,24 +57,23 @@ public class HdrDecoder implements StbDecoder {
             // Skip any initial whitespace
             skipWhitespace();
 
-            // Check signature
-            if (!readLine().startsWith("#?")) {
+            String signature = readLine();
+            if (signature == null || !signature.startsWith("#?")) {
                 return null;
             }
-
-            // Read format line
-            String formatLine = readLine();
-            if (formatLine != null && !formatLine.contains("RADIANCE") && !formatLine.contains("RGBE")) {
+            if (!signature.contains("RADIANCE") && !signature.contains("RGBE")) {
                 return null;
             }
 
             // Skip remaining header lines
+            String line;
             while (true) {
-                String line = readLine();
-                if (line == null || line.length() == 0) {
-                    break;
+                line = readLine();
+                if (line == null) {
+                    return null;
                 }
-                if (line.startsWith("#")) {
+                line = line.trim();
+                if (line.length() == 0) {
                     continue;
                 }
                 // Resolution line
@@ -87,7 +83,7 @@ public class HdrDecoder implements StbDecoder {
             }
 
             // Read resolution
-            String[] parts = readLine().trim().split("\\s+");
+            String[] parts = line.trim().split("\\s+");
             if (parts.length < 4) {
                 return null;
             }
@@ -158,6 +154,8 @@ public class HdrDecoder implements StbDecoder {
             decodeOldFormat(output, outChannels);
         }
 
+        // Set position to the actual amount of data written
+        output.position(width * height * outChannels * 4);
         output.flip();
 
         if (flipVertically) {
@@ -178,8 +176,9 @@ public class HdrDecoder implements StbDecoder {
         }
 
         // Skip until we find resolution
+        String line = null;
         while (true) {
-            String line = readLine();
+            line = readLine();
             if (line == null) {
                 throw new StbFailureException("Invalid HDR file - no resolution");
             }
@@ -189,10 +188,6 @@ public class HdrDecoder implements StbDecoder {
         }
 
         // Parse resolution - format varies
-        String line = readLine();
-        if (line == null) {
-            throw new StbFailureException("Invalid HDR file - no resolution");
-        }
 
         line = line.trim();
         String[] parts = line.split("\\s+");

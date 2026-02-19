@@ -162,9 +162,15 @@ public class StbImage {
         int rowSize = width * channels * bytesPerChannel;
         int totalSize = width * height * channels * bytesPerChannel;
 
-        // Create a duplicate and rewind to read from the beginning
-        ByteBuffer srcDup = src.duplicate();
-        srcDup.rewind();
+        src = src.duplicate();
+        src.rewind();
+
+        if (src.remaining() < totalSize) {
+            throw new StbFailureException("Not enough image data for vertical flip");
+        }
+        
+        // Limit the duplicate to the image data only
+        src.limit(src.position() + totalSize);
 
         ByteBuffer dst = allocator.apply(totalSize);
 
@@ -172,13 +178,14 @@ public class StbImage {
             int srcRow = y * rowSize;
             int dstRow = (height - 1 - y) * rowSize;
 
-            srcDup.position(srcRow).limit(srcRow + rowSize);
-            ByteBuffer srcRowBuf = srcDup.slice();
+            src.position(srcRow).limit(srcRow + rowSize);
+            ByteBuffer srcRowBuf = src.slice();
             dst.position(dstRow);
             dst.put(srcRowBuf);
         }
 
-        dst.flip();
+        dst.limit(totalSize);
+        dst.position(0);
         return dst;
     }
 }

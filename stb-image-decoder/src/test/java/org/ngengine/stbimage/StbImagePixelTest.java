@@ -123,6 +123,17 @@ public class StbImagePixelTest {
         }
     }
 
+    private boolean matchesExtensionFilter(String filename) {
+        String extFilter = System.getenv("TEST_EXT");
+        if (extFilter == null || extFilter.isBlank()) return true;
+        extFilter = extFilter.toLowerCase();
+        if (extFilter.startsWith(".")) extFilter = extFilter.substring(1);
+        String fileExt = "";
+        int idx = filename.lastIndexOf('.');
+        if (idx >= 0 && idx < filename.length() - 1) fileExt = filename.substring(idx + 1).toLowerCase();
+        return fileExt.equals(extFilter);
+    }
+
     /**
      * Test loading and decoding each image in the index
      */
@@ -140,6 +151,8 @@ public class StbImagePixelTest {
             if (count++ >= limit) break;
 
             String filename = imagePath.substring(imagePath.lastIndexOf('/') + 1);
+
+            if (!matchesExtensionFilter(filename)) continue;
 
             // Skip invalid/truncated test files
             if (filename.contains("truncated") || filename.equals("random.bin")) {
@@ -198,6 +211,8 @@ public class StbImagePixelTest {
             String filename = imagePath.substring(imagePath.lastIndexOf('/') + 1);
             String basename = filename.substring(0, filename.lastIndexOf('.'));
             String refFilename = filename + ".bin";
+
+            if (!matchesExtensionFilter(filename)) continue;
 
             // Skip files without reference data or known problematic ones
             if (filename.contains("truncated") || filename.equals("random.bin")) {

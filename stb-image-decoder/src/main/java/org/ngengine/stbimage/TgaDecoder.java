@@ -125,7 +125,7 @@ public class TgaDecoder implements StbDecoder {
 
         // Determine if origin is top or bottom
         boolean originTop = (yOrigin & ORIGIN_TOP_LEFT) != 0;
-        boolean actualFlipVertically = flipVertically ^ originTop;
+        boolean actualFlipVertically = flipVertically || !originTop;
 
         // Decode pixel data
         ByteBuffer output;
