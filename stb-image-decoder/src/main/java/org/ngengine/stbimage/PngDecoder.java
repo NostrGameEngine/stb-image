@@ -27,9 +27,9 @@ public class PngDecoder implements StbDecoder {
     private static final int CT_GREY_ALPHA = 4;
     private static final int CT_RGBA = 6;
 
-    private ByteBuffer buffer;
+    private final ByteBuffer buffer;
     private int pos;
-    private IntFunction<ByteBuffer> allocator;
+    private final IntFunction<ByteBuffer> allocator;
     private boolean flipVertically;
 
     private int width;
@@ -70,6 +70,7 @@ public class PngDecoder implements StbDecoder {
      * @param flipVertically true to flip decoded rows
      */
     public PngDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
+        StbLimits.lock(); // Lock limits on decoder initialization
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
         this.allocator = allocator;
         this.flipVertically = flipVertically;
@@ -186,7 +187,8 @@ public class PngDecoder implements StbDecoder {
         }
 
         // Decompress
-        ByteBuffer decompressed = decompress(ByteBuffer.wrap(idatBytes), isIphonePng);
+        int maxInflated = estimateInflatedUpperBound();
+        ByteBuffer decompressed = decompress(ByteBuffer.wrap(idatBytes), isIphonePng, maxInflated);
 
         // Decode image data
         ByteBuffer imageData = (interlace == 1)
@@ -206,7 +208,7 @@ public class PngDecoder implements StbDecoder {
             desiredChannels = (colorType == CT_GREY || colorType == CT_GREY_ALPHA) ? 1 : (colorType == CT_INDEXED ? 3 : srcChannels);
         }
 
-        ByteBuffer result = StbImage.convertChannels(getAllocator(), imageData, srcChannels, width, height, desiredChannels, bitDepth == 16);
+        ByteBuffer result = StbUtils.convertChannels(getAllocator(), imageData, srcChannels, width, height, desiredChannels, bitDepth == 16);
 
         boolean output16 = bitDepth == 16;
         if (output16) {
@@ -215,7 +217,7 @@ public class PngDecoder implements StbDecoder {
         }
 
         if (flipVertically) {
-            result = StbImage.verticalFlip(getAllocator(), result, width, height, desiredChannels, output16);
+            result = StbUtils.verticalFlip(getAllocator(), result, width, height, desiredChannels, output16);
         }
 
         return new StbImageResult(result, width, height, desiredChannels, desiredChannels, output16, false);
@@ -292,17 +294,20 @@ public class PngDecoder implements StbDecoder {
         }
     }
 
-    private ByteBuffer decompress(ByteBuffer compressed, boolean rawDeflate) {
+    private ByteBuffer decompress(ByteBuffer compressed, boolean rawDeflate, int maxOutputBytes) {
         Inflater inflater = new Inflater(rawDeflate);
         compressed.rewind();
         byte[] input = new byte[compressed.remaining()];
         compressed.get(input);
         inflater.setInput(input);
 
+        StbLimits.checkMaxSingleAllocationBytes(maxOutputBytes);
+
         try {
             // Use a larger buffer and inflate until finished
-            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
             byte[] buffer = new byte[4096];
+            int stalledRounds = 0;
             while (!inflater.finished()) {
                 int n = inflater.inflate(buffer);
                 if (n == 0 && !inflater.finished()) {
@@ -310,8 +315,17 @@ public class PngDecoder implements StbDecoder {
                     if (inflater.needsInput()) {
                         throw new StbFailureException("Zlib decompression: needs more input");
                     }
+                    if (inflater.needsDictionary()) {
+                        throw new StbFailureException("Zlib decompression requires unsupported dictionary");
+                    }
+                    StbLimits.checkStalledRounds(++stalledRounds);
+                    continue;
                 }
+                stalledRounds = 0;
                 baos.write(buffer, 0, n);
+                if (baos.size() > maxOutputBytes) {
+                    throw new StbFailureException("Zlib output exceeds PNG limits");
+                }
             }
             return ByteBuffer.wrap(baos.toByteArray());
         } catch (DataFormatException e) {
@@ -351,7 +365,7 @@ public class PngDecoder implements StbDecoder {
     private ByteBuffer decodeImageData(ByteBuffer data, int width, int height) {
         int channels = getChannels();
         int bytesPerChannel = bitDepth == 16 ? 2 : 1;
-        int outSize = width * height * channels * bytesPerChannel;
+        int outSize = StbLimits.checkedImageBufferSize(width, height, channels, bytesPerChannel);
         ByteBuffer output = allocator.apply(outSize);
         int filterBytesPerPixel = getFilterBytesPerPixel();
 
@@ -417,7 +431,8 @@ public class PngDecoder implements StbDecoder {
     private ByteBuffer decodeInterlacedImageData(ByteBuffer data, int width, int height) {
         int channels = getChannels();
         int bytesPerChannel = bitDepth == 16 ? 2 : 1;
-        ByteBuffer output = allocator.apply(width * height * channels * bytesPerChannel);
+        int outputSize = StbLimits.checkedImageBufferSize(width, height, channels, bytesPerChannel);
+        ByteBuffer output = allocator.apply(outputSize);
         int bitsPerPixel = getBitsPerPixel();
         int filterBytesPerPixel = getFilterBytesPerPixel();
 
@@ -436,7 +451,8 @@ public class PngDecoder implements StbDecoder {
             int scanlineSize = ((bitsPerPixel * pw + 7) >> 3) + 1;
             byte[] prev = new byte[scanlineSize - 1];
             byte[] cur = new byte[scanlineSize - 1];
-            ByteBuffer rowOut = allocator.apply(pw * channels * bytesPerChannel);
+            int rowOutSize = StbLimits.checkedImageBufferSize(pw, 1, channels, bytesPerChannel);
+            ByteBuffer rowOut = allocator.apply(rowOutSize);
 
             for (int py = 0; py < ph; py++) {
                 int filterType = data.get() & 0xFF;
@@ -495,13 +511,13 @@ public class PngDecoder implements StbDecoder {
             }
         }
 
-        output.limit(width * height * channels * bytesPerChannel);
+        output.limit(outputSize);
         output.position(0);
         return output;
     }
 
     private ByteBuffer convert16To8(ByteBuffer src16, int width, int height, int channels) {
-        int count = width * height * channels;
+        int count = StbLimits.checkedImageBufferSize(width, height, channels, 1);
         ByteBuffer out = allocator.apply(count);
         for (int i = 0; i < count; i++) {
             int v = Short.toUnsignedInt(src16.getShort(i * 2));
@@ -513,7 +529,7 @@ public class PngDecoder implements StbDecoder {
     }
 
     private void deIphone(ByteBuffer data, int channels, int width, int height, boolean is16Bit) {
-        int pixelCount = width * height;
+        int pixelCount = StbLimits.checkedPixelCount(width, height);
         if (!is16Bit) {
             if (channels == 3) {
                 for (int i = 0; i < pixelCount; i++) {
@@ -767,7 +783,8 @@ public class PngDecoder implements StbDecoder {
     private ByteBuffer applyColorKeyTransparency(ByteBuffer src, int srcChannels, int width, int height, boolean is16Bit) {
         int bytesPerChannel = is16Bit ? 2 : 1;
         int dstChannels = srcChannels + 1;
-        ByteBuffer out = allocator.apply(width * height * dstChannels * bytesPerChannel);
+        int outSize = StbLimits.checkedImageBufferSize(width, height, dstChannels, bytesPerChannel);
+        ByteBuffer out = allocator.apply(outSize);
         int max = is16Bit ? 0xFFFF : 0xFF;
 
         int grayKey = -1;
@@ -786,7 +803,8 @@ public class PngDecoder implements StbDecoder {
             bKey = is16Bit ? bb : to8bit(bb);
         }
 
-        for (int i = 0; i < width * height; i++) {
+        int pixelCount = StbLimits.checkedPixelCount(width, height);
+        for (int i = 0; i < pixelCount; i++) {
             int s = i * srcChannels * bytesPerChannel;
             int d = i * dstChannels * bytesPerChannel;
             if (srcChannels == 1) {
@@ -805,7 +823,7 @@ public class PngDecoder implements StbDecoder {
             }
         }
 
-        out.limit(width * height * dstChannels * bytesPerChannel);
+        out.limit(outSize);
         out.position(0);
         return out;
     }
@@ -846,6 +864,36 @@ public class PngDecoder implements StbDecoder {
 
     private boolean hasRemaining() {
         return pos < buffer.limit();
+    }
+
+    private int estimateInflatedUpperBound() {
+        if (interlace == 0) {
+            int row = getScanlineSize(width);
+            long total = (long) row * height;
+            if (total <= 0 || total > Integer.MAX_VALUE) {
+                throw new StbFailureException("PNG inflate bound too large");
+            }
+            return (int) total;
+        }
+        int[] xOrig = {0, 4, 0, 2, 0, 1, 0};
+        int[] yOrig = {0, 0, 4, 0, 2, 0, 1};
+        int[] xStep = {8, 8, 4, 4, 2, 2, 1};
+        int[] yStep = {8, 8, 8, 4, 4, 2, 2};
+        long total = 0;
+        int bitsPerPixel = getBitsPerPixel();
+        for (int pass = 0; pass < 7; pass++) {
+            int pw = (width - xOrig[pass] + xStep[pass] - 1) / xStep[pass];
+            int ph = (height - yOrig[pass] + yStep[pass] - 1) / yStep[pass];
+            if (pw <= 0 || ph <= 0) {
+                continue;
+            }
+            int row = ((bitsPerPixel * pw + 7) >> 3) + 1;
+            total += (long) row * ph;
+            if (total > Integer.MAX_VALUE) {
+                throw new StbFailureException("PNG inflate bound too large");
+            }
+        }
+        return (int) total;
     }
 
 }

@@ -39,6 +39,7 @@ public class HdrDecoder implements StbDecoder {
      * @param flipVertically true to vertically flip decoded output
      */
     public HdrDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
+        StbLimits.lock(); // Lock limits on decoder initialization
         this.buffer = buffer.duplicate();
         this.allocator = allocator;
         this.flipVertically = flipVertically;
@@ -81,14 +82,15 @@ public class HdrDecoder implements StbDecoder {
         pos = 0;
         parseHeader();
 
-        StbImage.validateDimensions(width, height);
+        StbLimits.validateDimensions(width, height);
 
         int reqComp = (desiredChannels == 0) ? 3 : desiredChannels;
         if (reqComp < 1 || reqComp > 4) {
             throw new StbFailureException("Bad desired channels: " + reqComp);
         }
 
-        ByteBuffer output = allocator.apply(width * height * reqComp * 4);
+        int outputSize = StbLimits.checkedImageBufferSize(width, height, reqComp, 4);
+        ByteBuffer output = allocator.apply(outputSize);
 
         if (width < 8 || width >= 32768) {
             decodeFlat(output, reqComp);
@@ -96,11 +98,11 @@ public class HdrDecoder implements StbDecoder {
             decodeRle(output, reqComp);
         }
 
-        output.limit(width * height * reqComp * 4);
+        output.limit(outputSize);
         output.position(0);
 
         if (flipVertically) {
-            output = StbImage.verticalFlip(getAllocator(), output, width, height, reqComp, 4);
+            output = StbUtils.verticalFlip(getAllocator(), output, width, height, reqComp, 4);
         }
 
         return new StbImageResult(output, width, height, reqComp, desiredChannels, false, true);
@@ -196,7 +198,7 @@ public class HdrDecoder implements StbDecoder {
             if (c1 != 2 || c2 != 2 || (len & 0x80) != 0) {
                 int e = readU8();
                 putConverted(output, 0, reqComp, c1, c2, len, e);
-                int totalPixels = width * height;
+                int totalPixels = StbLimits.checkedPixelCount(width, height);
                 for (int pixel = 1; pixel < totalPixels; pixel++) {
                     int r = readU8();
                     int g = readU8();
@@ -213,7 +215,8 @@ public class HdrDecoder implements StbDecoder {
             }
 
             if (scanline == null) {
-                scanline = new byte[width * 4];
+                int scanlineSize = StbLimits.checkedImageBufferSize(width, 1, 4, 1);
+                scanline = new byte[scanlineSize];
             }
 
             for (int k = 0; k < 4; k++) {

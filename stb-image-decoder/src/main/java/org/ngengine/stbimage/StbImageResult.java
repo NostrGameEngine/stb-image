@@ -117,7 +117,7 @@ public class StbImageResult {
      * Gets the total size of the pixel data in bytes.
      */
     public int getDataSize() {
-        return width * height * channels * getBytesPerChannel();
+        return StbLimits.checkedImageBufferSize(width, height, channels, getBytesPerChannel());
     }
 
     /**

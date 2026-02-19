@@ -52,6 +52,7 @@ public class PsdDecoder implements StbDecoder {
      * @param flipVertically true to vertically flip decoded output
      */
     public PsdDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
+        StbLimits.lock(); // Lock limits on decoder initialization
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
         this.allocator = allocator;
         this.flipVertically = flipVertically;
@@ -83,14 +84,15 @@ public class PsdDecoder implements StbDecoder {
         pos = 0;
         parseHeader();
 
-        StbImage.validateDimensions(width, height);
+        StbLimits.validateDimensions(width, height);
 
         boolean is16Bit = bitsPerChannel == 16;
         int bytesPerChannel = is16Bit ? 2 : 1;
         int srcChannels = Math.min(channels, 4);
 
         // stb PSD path decodes RGBA and then converts for req_comp.
-        ByteBuffer rgba = allocator.apply(width * height * 4 * bytesPerChannel);
+        int rgbaSize = StbLimits.checkedImageBufferSize(width, height, 4, bytesPerChannel);
+        ByteBuffer rgba = allocator.apply(rgbaSize);
         fillOpaqueAlpha(rgba, is16Bit);
 
         int compression = readU16BE();
@@ -102,13 +104,13 @@ public class PsdDecoder implements StbDecoder {
             throw new StbFailureException("Unsupported PSD compression: " + compression);
         }
 
-        rgba.limit(width * height * 4 * bytesPerChannel);
+        rgba.limit(rgbaSize);
         rgba.position(0);
 
         int outChannels = (desiredChannels == 0) ? 4 : desiredChannels;
-        ByteBuffer out = StbImage.convertChannels(getAllocator(), rgba, 4, width, height, outChannels, is16Bit);
+        ByteBuffer out = StbUtils.convertChannels(getAllocator(), rgba, 4, width, height, outChannels, is16Bit);
         if (flipVertically) {
-            out = StbImage.verticalFlip(getAllocator(), out, width, height, outChannels, is16Bit);
+            out = StbUtils.verticalFlip(getAllocator(), out, width, height, outChannels, is16Bit);
         }
 
         return new StbImageResult(out, width, height, outChannels, desiredChannels, is16Bit, false);
@@ -158,7 +160,7 @@ public class PsdDecoder implements StbDecoder {
     }
 
     private void fillOpaqueAlpha(ByteBuffer out, boolean is16Bit) {
-        int pixels = width * height;
+        int pixels = StbLimits.checkedPixelCount(width, height);
         if (is16Bit) {
             for (int i = 0; i < pixels; i++) {
                 out.putShort((i * 8) + 6, (short) 0xFFFF);

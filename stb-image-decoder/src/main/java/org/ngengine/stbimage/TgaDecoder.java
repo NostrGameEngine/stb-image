@@ -20,8 +20,8 @@ public class TgaDecoder implements StbDecoder {
     // Origin
     private static final int ORIGIN_TOP_LEFT = 0x20;
 
-    private ByteBuffer buffer;
-    private IntFunction<ByteBuffer> allocator;
+    private final ByteBuffer buffer;
+    private final IntFunction<ByteBuffer> allocator;
     private boolean flipVertically;
 
     private int width;
@@ -55,6 +55,7 @@ public class TgaDecoder implements StbDecoder {
      * @param flipVertically true to vertically flip decoded output
      */
     public TgaDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
+        StbLimits.lock(); // Lock limits on decoder initialization
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
         this.buffer.position(0);
         this.allocator = allocator;
@@ -105,7 +106,7 @@ public class TgaDecoder implements StbDecoder {
     public StbImageResult load(int desiredChannels) {
         readHeader();
 
-        StbImage.validateDimensions(width, height);
+        StbLimits.validateDimensions(width, height);
 
         // Determine channels based on type
         if (imageType == TYPE_UNMAPPED_GRAY || imageType == TYPE_RLE_GRAY) {
@@ -160,10 +161,10 @@ public class TgaDecoder implements StbDecoder {
         int outChannels = (desiredChannels == 0) ?
             (channels == 1 ? 1 : 3) : desiredChannels;
 
-        ByteBuffer result = StbImage.convertChannels(getAllocator(),output, srcChannels, width, height, outChannels, false);
+        ByteBuffer result = StbUtils.convertChannels(getAllocator(),output, srcChannels, width, height, outChannels, false);
 
         if (actualFlipVertically) {
-            result = StbImage.verticalFlip(getAllocator(),result, width, height, outChannels, false);
+            result = StbUtils.verticalFlip(getAllocator(),result, width, height, outChannels, false);
         }
 
         return new StbImageResult(result, width, height, outChannels, desiredChannels, false, false);
@@ -203,7 +204,8 @@ public class TgaDecoder implements StbDecoder {
     }
 
     private ByteBuffer decodeUncompressed() {
-        ByteBuffer output = allocator.apply(width * height * channels);
+        int outSize = StbLimits.checkedImageBufferSize(width, height, channels, 1);
+        ByteBuffer output = allocator.apply(outSize);
 
         int bytesPerPixel = (bitsPerPixel + 7) / 8;
 
@@ -278,13 +280,14 @@ public class TgaDecoder implements StbDecoder {
         }
 
         // Set limit to actual data size since we use absolute positioning
-        output.limit(width * height * channels);
+        output.limit(outSize);
         return output;
     }
 
     private ByteBuffer decodeRLE() {
-        ByteBuffer output = allocator.apply(width * height * channels);
-        int pixelCount = width * height;
+        int outSize = StbLimits.checkedImageBufferSize(width, height, channels, 1);
+        ByteBuffer output = allocator.apply(outSize);
+        int pixelCount = StbLimits.checkedPixelCount(width, height);
         int pixelIndex = 0;
         int bytesPerPixel = Math.max(1, (bitsPerPixel + 7) / 8);
 
@@ -389,7 +392,7 @@ public class TgaDecoder implements StbDecoder {
         }
 
         // Set limit to the actual data size since we use absolute positioning
-        output.limit(width * height * channels);
+        output.limit(outSize);
         return output;
     }
 

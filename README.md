@@ -7,7 +7,17 @@ This repository contains an experimental, pure-Java (Java 11+) port/fork of `stb
 
 ## Project status and reliability
 
-Much of the codebase was initially produced with AI-assisted translation, then reviewed and patched by humans. The implementation is memory-safe in the usual Java sense (no unsafe memory operations), and it intentionally does not perform any filesystem access on its own. In practice, it should be safe to use as long as a safe allocator is passed to the API (the default is `ByteBuffer::allocate`, which is heap-based and GC-managed).
+Much of the codebase was initially produced with AI-assisted translation, then reviewed, patched and improved by humans. 
+
+The implementation is:
+
+- memory-safe 
+- thread-safe
+- hardened against OOM and DoS attack vectors
+- and it intentionally does not perform any filesystem access
+
+In practice, it should be safe to use even to load untrusted files.
+By default the library uses `ByteBuffer.allocate` as the allocator. You can pass a custom allocator, but it must manage the buffers' lifecycle and release resources appropriately (for example, ensure direct buffers are reclaimed).
 
 That said, this is still an **experimental** project. For maximum stability, performance, and long-term compatibility, using the [LWJGL3 native bindings](https://www.lwjgl.org/) to the original C library is still recommended when possible.
 
@@ -16,6 +26,7 @@ This project is best suited for:
 * sandboxed environments (e.g., restricted runtimes)
 * platforms without native/JNI support
 * projects that prefer "pure Java" dependencies for cross-platform compatibility, ease of use or peace of mind
+* projects that load untrusted files and want to avoid native attack surfaces
 
 ## API notes and divergences
 

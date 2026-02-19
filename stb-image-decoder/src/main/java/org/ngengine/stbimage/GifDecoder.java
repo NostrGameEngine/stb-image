@@ -93,6 +93,7 @@ public class GifDecoder implements StbDecoder {
      * @param flipVertically true to flip decoded rows
      */
     public GifDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
+        StbLimits.lock(); // Lock limits on decoder initialization
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
         this.allocator = allocator;
         this.flipVertically = flipVertically;
@@ -228,10 +229,11 @@ public class GifDecoder implements StbDecoder {
         backgroundColorIndex = readU8();
         readU8(); // pixel aspect ratio
 
-        StbImage.validateDimensions(width, height);
+        StbLimits.validateDimensions(width, height);
 
         if (hasGlobalColorTable) {
             globalColorTable = new byte[globalColorTableSize * 3];
+            ensureAvailable(globalColorTable.length, "GIF global color table truncated");
             for (int i = 0; i < globalColorTable.length; i++) {
                 globalColorTable[i] = (byte) readU8();
             }
@@ -239,9 +241,10 @@ public class GifDecoder implements StbDecoder {
             globalColorTable = new byte[0];
         }
 
-        int pixelCount = width * height;
-        byte[] canvas = new byte[pixelCount * 4];
-        byte[] background = new byte[pixelCount * 4];
+        int pixelCount = StbLimits.checkedPixelCount(width, height);
+        int rgbaSize = StbLimits.checkedImageBufferSize(width, height, 4, 1);
+        byte[] canvas = new byte[rgbaSize];
+        byte[] background = new byte[rgbaSize];
         byte[] history = new byte[pixelCount];
         byte[] prevFrame = null;
         byte[] prevPrevFrame = null;
@@ -392,6 +395,7 @@ public class GifDecoder implements StbDecoder {
 
         if (hasLocalColorTable) {
             block.localColorTable = new byte[localColorTableSize * 3];
+            ensureAvailable(block.localColorTable.length, "GIF local color table truncated");
             for (int i = 0; i < block.localColorTable.length; i++) {
                 block.localColorTable[i] = (byte) readU8();
             }
@@ -409,6 +413,7 @@ public class GifDecoder implements StbDecoder {
             int blockSize = readU8();
             if (blockSize == 0) break;
             byte[] chunk = new byte[blockSize];
+            ensureAvailable(blockSize, "GIF sub-block truncated");
             buffer.get(pos, chunk, 0, blockSize);
             pos += blockSize;
             chunks.add(chunk);
@@ -430,6 +435,7 @@ public class GifDecoder implements StbDecoder {
             if (blockSize == 0) {
                 break;
             }
+            ensureAvailable(blockSize, "GIF sub-block truncated");
             pos += blockSize;
         }
     }
@@ -565,10 +571,10 @@ public class GifDecoder implements StbDecoder {
         }
         src.limit(rgba.length);
 
-        ByteBuffer result = StbImage.convertChannels(getAllocator(), src, 4, width, height, outChannels, false);
+        ByteBuffer result = StbUtils.convertChannels(getAllocator(), src, 4, width, height, outChannels, false);
 
         if (flipVertically) {
-            result = StbImage.verticalFlip(getAllocator(), result, width, height, outChannels, false);
+            result = StbUtils.verticalFlip(getAllocator(), result, width, height, outChannels, false);
         }
 
         return new StbImageResult(result, width, height, outChannels, desiredChannels, false, false);
@@ -591,6 +597,7 @@ public class GifDecoder implements StbDecoder {
     }
 
     private String readString(int length) {
+        ensureAvailable(length, "GIF header truncated");
         StringBuilder sb = new StringBuilder(length);
         for (int i = 0; i < length; i++) {
             sb.append((char) (buffer.get(pos++) & 0xFF));
@@ -599,12 +606,20 @@ public class GifDecoder implements StbDecoder {
     }
 
     private int readU8() {
+        ensureAvailable(1, "GIF data truncated");
         return buffer.get(pos++) & 0xFF;
     }
 
     private int readU16LE() {
+        ensureAvailable(2, "GIF data truncated");
         int b0 = buffer.get(pos++) & 0xFF;
         int b1 = buffer.get(pos++) & 0xFF;
         return b0 | (b1 << 8);
+    }
+
+    private void ensureAvailable(int n, String message) {
+        if (n < 0 || pos + n > buffer.limit()) {
+            throw new StbFailureException(message);
+        }
     }
 }

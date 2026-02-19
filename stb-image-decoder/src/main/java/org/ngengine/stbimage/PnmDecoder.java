@@ -18,9 +18,9 @@ public class PnmDecoder implements StbDecoder {
     private static final int PPM_BINARY = 'P' + ('6' << 8);
     private static final int PFM = 'P' + ('f' << 8);
 
-    private ByteBuffer buffer;
+    private final ByteBuffer buffer;
     private int pos;
-    private IntFunction<ByteBuffer> allocator;
+    private final IntFunction<ByteBuffer> allocator;
     private boolean flipVertically;
 
     private int width;
@@ -53,6 +53,7 @@ public class PnmDecoder implements StbDecoder {
      * @param flipVertically true to vertically flip decoded output
      */
     public PnmDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
+        StbLimits.lock(); // Lock limits on decoder initialization
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
         this.allocator = allocator;
         this.flipVertically = flipVertically;
@@ -93,13 +94,14 @@ public class PnmDecoder implements StbDecoder {
         pos = 0;  // Also reset our position tracker
         readHeader();
 
-        StbImage.validateDimensions(width, height);
+        StbLimits.validateDimensions(width, height);
 
         int outChannels = (desiredChannels == 0) ? channels : desiredChannels;
         int bytesPerChannel = (is16Bit || isFloat) ? 2 : 1;
         if (isFloat) bytesPerChannel = 4;
 
-        ByteBuffer output = allocator.apply(width * height * outChannels * bytesPerChannel);
+        int totalBytes = StbLimits.checkedImageBufferSize(width, height, outChannels, bytesPerChannel);
+        ByteBuffer output = allocator.apply(totalBytes);
 
         // Decode based on format
         if (format == PGM_BINARY) {
@@ -113,12 +115,11 @@ public class PnmDecoder implements StbDecoder {
         }
 
         // Set limit since absolute positioning doesn't advance position
-        int totalBytes = width * height * outChannels * bytesPerChannel;
         output.limit(totalBytes);
         output.position(0);
 
         if (flipVertically) {
-            output = StbImage.verticalFlip(getAllocator(), output, width, height, outChannels, bytesPerChannel);
+            output = StbUtils.verticalFlip(getAllocator(), output, width, height, outChannels, bytesPerChannel);
         }
 
         return new StbImageResult(output, width, height, outChannels, desiredChannels, is16Bit, isFloat);

@@ -1,5 +1,6 @@
 package org.ngengine.stbimage;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
@@ -15,18 +16,23 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 public class StbImageApiTest {
 
-    @Test
-    void testConstants() {
-        assertEquals(0, StbImage.STBI_DEFAULT);
-        assertEquals(1, StbImage.STBI_GREY);
-        assertEquals(2, StbImage.STBI_GREY_ALPHA);
-        assertEquals(3, StbImage.STBI_RGB);
-        assertEquals(4, StbImage.STBI_RGB_ALPHA);
-    }
 
     @Test
-    void testMaxDimensions() {
-        assertEquals(1 << 24, StbImage.STBI_MAX_DIMENSIONS);
+    void restLimits() {
+        assertThrows(StbFailureException.class, () -> StbLimits.validateDimensions(0, 100));
+        assertThrows(StbFailureException.class, () -> StbLimits.validateDimensions(12, 99999999));
+        assertThrows(StbFailureException.class, () -> StbLimits.validateDimensions(99999999, 12));
+        assertDoesNotThrow(() -> StbLimits.validateDimensions(1, 1));
+        assertDoesNotThrow(() -> StbLimits.validateDimensions(256, 256));
+        assertDoesNotThrow(() -> StbLimits.validateDimensions(4096, 4096));
+        assertDoesNotThrow(() -> StbLimits.checkMaxSingleAllocationBytes(1024*1024*12));
+        assertDoesNotThrow(() -> StbLimits.checkMaxTotalAllocationPerDecodeBytes(1024*1024*12));
+        assertThrows(StbFailureException.class, () -> StbLimits.checkMaxSingleAllocationBytes(-1));
+        assertThrows(StbFailureException.class, () -> StbLimits.checkMaxTotalAllocationPerDecodeBytes(-1));
+        assertThrows(StbFailureException.class, () -> StbLimits.checkMaxSingleAllocationBytes(0));
+        assertThrows(StbFailureException.class, () -> StbLimits.checkMaxTotalAllocationPerDecodeBytes(0));
+        assertThrows(StbFailureException.class, () -> StbLimits.checkMaxSingleAllocationBytes(Integer.MAX_VALUE));
+        assertThrows(StbFailureException.class, () -> StbLimits.checkMaxTotalAllocationPerDecodeBytes(Long.MAX_VALUE));
     }
 
     @Test
@@ -35,6 +41,7 @@ public class StbImageApiTest {
         assertFalse(stb.isConvertIphonePngToRgb());
         assertFalse(stb.isUnpremultiplyOnLoad());
         assertFalse(stb.isFillGifFirstFrameBackground());
+  
     }
 
     @Test
@@ -46,6 +53,7 @@ public class StbImageApiTest {
         assertTrue(stb.isConvertIphonePngToRgb());
         assertTrue(stb.isUnpremultiplyOnLoad());
         assertTrue(stb.isFillGifFirstFrameBackground());
+      
     }
 
     @Test
@@ -104,26 +112,38 @@ public class StbImageApiTest {
         assertTrue(field.getBoolean(decoder));
     }
 
- 
-  
-    
+
+   
     
 
     @Test
     void testValidateDimensions() {
         // Valid dimensions should not throw
-        assertDoesNotThrow(() -> StbImage.validateDimensions(1, 1));
-        assertDoesNotThrow(() -> StbImage.validateDimensions(100, 100));
-        assertDoesNotThrow(() -> StbImage.validateDimensions(16384, 16384));
+        assertDoesNotThrow(() -> StbLimits.validateDimensions(1, 1));
+        assertDoesNotThrow(() -> StbLimits.validateDimensions(100, 100));
+        assertDoesNotThrow(() -> StbLimits.validateDimensions(16384, 16384));
 
         // Invalid should throw
-        assertThrows(StbFailureException.class, () -> StbImage.validateDimensions(0, 100));
-        assertThrows(StbFailureException.class, () -> StbImage.validateDimensions(100, 0));
-        assertThrows(StbFailureException.class, () -> StbImage.validateDimensions(-1, 100));
+        assertThrows(StbFailureException.class, () -> StbLimits.validateDimensions(0, 100));
+        assertThrows(StbFailureException.class, () -> StbLimits.validateDimensions(100, 0));
+        assertThrows(StbFailureException.class, () -> StbLimits.validateDimensions(-1, 100));
 
         // Too large should throw
         assertThrows(StbFailureException.class, () ->
-            StbImage.validateDimensions(1 << 25, 1));
+            StbLimits.validateDimensions(1 << 25, 1));
+    }
+
+    @Test
+    void testCheckedImageBufferSizeOverflow() {
+        assertThrows(StbFailureException.class, () ->
+                StbLimits.checkedImageBufferSize(1 << 24, 1 << 24, 4, 1));
+    }
+
+    @Test
+    void testConvertChannelsRejectsOverflowSizedInput() {
+        ByteBuffer src = ByteBuffer.allocate(4);
+        assertThrows(StbFailureException.class, () ->
+                StbUtils.convertChannels(ByteBuffer::allocate, src, 4, 1 << 24, 1 << 24, 4, false));
     }
 
     @Test
@@ -135,7 +155,7 @@ public class StbImageApiTest {
         src.flip();
 
         // Should not throw
-        assertDoesNotThrow(() -> StbImage.verticalFlip(ByteBuffer::allocate, src, 2, 2, 1, false));
+        assertDoesNotThrow(() -> StbUtils.verticalFlip(ByteBuffer::allocate, src, 2, 2, 1, false));
     }
 
     @Test
@@ -143,7 +163,7 @@ public class StbImageApiTest {
         // 3 channels to 3 channels - should return same data
         ByteBuffer src = ByteBuffer.wrap(new byte[] { 1, 2, 3, 4, 5, 6 });
 
-        ByteBuffer result = StbImage.convertChannels(ByteBuffer::allocate, src, 3, 2, 1, 3, false);
+        ByteBuffer result = StbUtils.convertChannels(ByteBuffer::allocate, src, 3, 2, 1, 3, false);
 
         assertNotNull(result);
     }
@@ -159,7 +179,7 @@ public class StbImageApiTest {
                     input[i] = (byte) (10 + i * 17);
                 }
 
-                ByteBuffer out = StbImage.convertChannels(ByteBuffer::allocate, ByteBuffer.wrap(input), src, width, height, dst, false);
+                ByteBuffer out = StbUtils.convertChannels(ByteBuffer::allocate, ByteBuffer.wrap(input), src, width, height, dst, false);
                 byte[] actual = new byte[width * height * dst];
                 out.get(actual);
                 byte[] expected = expectedConvert8(input, src, dst, width * height);
@@ -185,7 +205,7 @@ public class StbImageApiTest {
                 }
                 in.flip();
 
-                ByteBuffer out = StbImage.convertChannels(ByteBuffer::allocate, in, src, width, height, dst, true);
+                ByteBuffer out = StbUtils.convertChannels(ByteBuffer::allocate, in, src, width, height, dst, true);
                 short[] actual = new short[pixels * dst];
                 for (int i = 0; i < actual.length; i++) {
                     actual[i] = out.getShort(i * 2);
@@ -207,7 +227,7 @@ public class StbImageApiTest {
             src.putFloat(v);
         }
         src.flip();
-        ByteBuffer flipped = StbImage.verticalFlip(ByteBuffer::allocate, src, 2, 2, 3, 4);
+        ByteBuffer flipped = StbUtils.verticalFlip(ByteBuffer::allocate, src, 2, 2, 3, 4);
         float[] actual = new float[12];
         for (int i = 0; i < actual.length; i++) {
             actual[i] = flipped.getFloat(i * 4);

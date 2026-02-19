@@ -38,6 +38,7 @@ public class PicDecoder implements StbDecoder {
      * @param flipVertically true to vertically flip decoded output
      */
     public PicDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
+        StbLimits.lock(); // Lock limits on decoder initialization
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
         this.allocator = allocator;
         this.flipVertically = flipVertically;
@@ -79,9 +80,10 @@ public class PicDecoder implements StbDecoder {
     @Override
     public StbImageResult load(int desiredChannels) {
         PicPacket[] packets = parseHeaderAndPackets(true);
+        int pixelCount = StbLimits.checkedPixelCount(width, height);
 
-        ByteBuffer rgba = allocator.apply(width * height * 4);
-        for (int i = 0; i < width * height; i++) {
+        ByteBuffer rgba = allocator.apply(StbLimits.checkedImageBufferSize(width, height, 4, 1));
+        for (int i = 0; i < pixelCount; i++) {
             rgba.put(i * 4 + 3, (byte) 0xFF);
         }
 
@@ -91,9 +93,9 @@ public class PicDecoder implements StbDecoder {
             desiredChannels = srcChannels;
         }
 
-        ByteBuffer out = StbImage.convertChannels(allocator, rgba, 4, width, height, desiredChannels, false);
+        ByteBuffer out = StbUtils.convertChannels(allocator, rgba, 4, width, height, desiredChannels, false);
         if (flipVertically) {
-            out = StbImage.verticalFlip(allocator, out, width, height, desiredChannels, false);
+            out = StbUtils.verticalFlip(allocator, out, width, height, desiredChannels, false);
         }
         return new StbImageResult(out, width, height, desiredChannels, desiredChannels, false, false);
     }
@@ -115,7 +117,7 @@ public class PicDecoder implements StbDecoder {
         pos = 92;
         width = readU16BE();
         height = readU16BE();
-        StbImage.validateDimensions(width, height);
+        StbLimits.validateDimensions(width, height);
 
         ensureAvailable(8, "PIC header too short");
         skip(8); // ratio, fields, pad

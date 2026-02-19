@@ -15,9 +15,9 @@ public class BmpDecoder implements StbDecoder{
     private static final int BI_RLE4 = 2;
     private static final int BI_BITFIELDS = 3;
 
-    private ByteBuffer buffer;
+    private final ByteBuffer buffer;
     private int pos;
-    private IntFunction<ByteBuffer> allocator;
+    private final IntFunction<ByteBuffer> allocator;
     private boolean flipVertically;
 
     private int width;
@@ -54,6 +54,7 @@ public class BmpDecoder implements StbDecoder{
      * @param flipVertically true to flip decoded rows
      */
     public BmpDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
+        StbLimits.lock(); // Lock limits on decoder initialization
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
         this.buffer.position(0);
         this.allocator = allocator;
@@ -182,7 +183,7 @@ public class BmpDecoder implements StbDecoder{
                 throw new StbFailureException("Unsupported BMP header size: " + headerSize);
         }
 
-        StbImage.validateDimensions(width, height);
+        StbLimits.validateDimensions(width, height);
 
         if (bitsPerPixel <= 8) {
             channels = 4; // Always decode to RGBA for palette images
@@ -279,16 +280,19 @@ public class BmpDecoder implements StbDecoder{
             desiredChannels = (bitsPerPixel <= 8) ? 4 : channels;
         }
 
-        ByteBuffer result = StbImage.convertChannels(getAllocator(),output, channels, width, height, desiredChannels, false);
+        ByteBuffer result = StbUtils.convertChannels(getAllocator(),output, channels, width, height, desiredChannels, false);
 
         if (flipVertically) {
-            result = StbImage.verticalFlip(getAllocator(),result, width, height, desiredChannels, false);
+            result = StbUtils.verticalFlip(getAllocator(),result, width, height, desiredChannels, false);
         }
 
         return new StbImageResult(result, width, height, desiredChannels, desiredChannels, false, false);
     }
 
     private boolean readSignature() {
+        if (pos + 1 >= buffer.limit()) {
+            return false;
+        }
         // Check for "BM" signature - compare bytes directly since buffer order may vary
         byte b0 = buffer.get(pos);
         byte b1 = buffer.get(pos + 1);
@@ -300,7 +304,8 @@ public class BmpDecoder implements StbDecoder{
     }
 
     private ByteBuffer decodeUncompressed(int rowStride) {
-        ByteBuffer output = allocator.apply(width * height * channels);
+        int outSize = StbLimits.checkedImageBufferSize(width, height, channels, 1);
+        ByteBuffer output = allocator.apply(outSize);
 
         // BMP stores rows bottom-up, start from bottom (last row in file)
         for (int y = height - 1; y >= 0; y--) {
@@ -377,12 +382,13 @@ public class BmpDecoder implements StbDecoder{
         }
 
         // Set limit to actual data size since we use absolute positioning
-        output.limit(width * height * channels);
+        output.limit(outSize);
         return output;
     }
 
     private ByteBuffer decodeRLE8() {
-        ByteBuffer output = allocator.apply(width * height * channels);
+        int outSize = StbLimits.checkedImageBufferSize(width, height, channels, 1);
+        ByteBuffer output = allocator.apply(outSize);
         int x = 0, y = height - 1;
 
         while (y >= 0) {
@@ -411,12 +417,14 @@ public class BmpDecoder implements StbDecoder{
                     for (int i = 0; i < b2; i++) {
                         int idx = readU8();
                         int p = idx * 4;
-                        int outPos = (y * width + x) * channels;
-                        output.put(outPos, palette[p + 2]);
-                        output.put(outPos + 1, palette[p + 1]);
-                        output.put(outPos + 2, palette[p]);
-                        if (channels == 4) {
-                            output.put(outPos + 3, palette[p + 3]);
+                        if (x >= 0 && x < width && y >= 0 && y < height) {
+                            int outPos = (y * width + x) * channels;
+                            output.put(outPos, palette[p + 2]);
+                            output.put(outPos + 1, palette[p + 1]);
+                            output.put(outPos + 2, palette[p]);
+                            if (channels == 4) {
+                                output.put(outPos + 3, palette[p + 3]);
+                            }
                         }
                         x++;
                     }
@@ -430,12 +438,14 @@ public class BmpDecoder implements StbDecoder{
                 int idx = b2;
                 int p = idx * 4;
                 for (int i = 0; i < b1 && x < width; i++) {
-                    int outPos = (y * width + x) * channels;
-                    output.put(outPos, palette[p + 2]);
-                    output.put(outPos + 1, palette[p + 1]);
-                    output.put(outPos + 2, palette[p]);
-                    if (channels == 4) {
-                        output.put(outPos + 3, palette[p + 3]);
+                    if (y >= 0 && y < height) {
+                        int outPos = (y * width + x) * channels;
+                        output.put(outPos, palette[p + 2]);
+                        output.put(outPos + 1, palette[p + 1]);
+                        output.put(outPos + 2, palette[p]);
+                        if (channels == 4) {
+                            output.put(outPos + 3, palette[p + 3]);
+                        }
                     }
                     x++;
                 }
@@ -443,12 +453,13 @@ public class BmpDecoder implements StbDecoder{
         }
 
         // Set limit to actual data size since we use absolute positioning
-        output.limit(width * height * channels);
+        output.limit(outSize);
         return output;
     }
 
     private ByteBuffer decodeRLE4() {
-        ByteBuffer output = allocator.apply(width * height * channels);
+        int outSize = StbLimits.checkedImageBufferSize(width, height, channels, 1);
+        ByteBuffer output = allocator.apply(outSize);
         int x = 0, y = height - 1;
 
         while (y >= 0) {
@@ -536,7 +547,7 @@ public class BmpDecoder implements StbDecoder{
         }
 
         // Set limit to actual data size since we use absolute positioning
-        output.limit(width * height * channels);
+        output.limit(outSize);
         return output;
     }
 

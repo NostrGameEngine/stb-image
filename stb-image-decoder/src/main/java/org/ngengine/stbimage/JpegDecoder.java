@@ -25,9 +25,9 @@ public class JpegDecoder implements StbDecoder {
     private static final int FAST_BITS = 9;
     private static final int MARKER_NONE = 0xFF;
 
-    private ByteBuffer buffer;
+    private final ByteBuffer buffer;
     private int pos;
-    private IntFunction<ByteBuffer> allocator;
+    private final IntFunction<ByteBuffer> allocator;
     private boolean flipVertically;
 
     private int width;
@@ -155,6 +155,7 @@ public class JpegDecoder implements StbDecoder {
      * @param flipVertically true to vertically flip decoded output
      */
     public JpegDecoder(ByteBuffer src, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
+        StbLimits.lock(); // Lock limits on decoder initialization
         // Respect caller's position/limit by slicing
         this.buffer = src.duplicate().order(ByteOrder.BIG_ENDIAN);
         this.allocator = allocator ;
@@ -255,7 +256,8 @@ public class JpegDecoder implements StbDecoder {
             res[i] = makeResample(imgComp[i]);
         }
 
-        ByteBuffer output = allocator.apply(width * height * outChannels);
+        int outSize = StbLimits.checkedImageBufferSize(width, height, outChannels, 1);
+        ByteBuffer output = allocator.apply(outSize);
 
         // Main scanline loop
         for (int y = 0; y < height; y++) {
@@ -347,10 +349,10 @@ public class JpegDecoder implements StbDecoder {
         }
 
         if (flipVertically) {
-            output = StbImage.verticalFlip(getAllocator(),output, width, height, outChannels, false);
+            output = StbUtils.verticalFlip(getAllocator(),output, width, height, outChannels, false);
         }
 
-        output.limit(width * height * outChannels);
+        output.limit(outSize);
         return new StbImageResult(output, width, height, outChannels, desiredChannels, false, false);
     }
 
@@ -528,7 +530,7 @@ public class JpegDecoder implements StbDecoder {
 
         progressive = isProgressive;
 
-        StbImage.validateDimensions(width, height);
+        StbLimits.validateDimensions(width, height);
 
         if (Lf != 8 + 3 * components) {
             // Check for CMYK case: Lf = 8 + 3*4 = 20 for CMYK

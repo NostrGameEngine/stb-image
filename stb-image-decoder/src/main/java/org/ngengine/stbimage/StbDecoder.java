@@ -7,6 +7,7 @@ import java.util.function.IntFunction;
  * Common decoder contract used by all image format implementations.
  */
 public interface StbDecoder {
+    
     /**
      * Reads image metadata without fully decoding pixel data.
      *
@@ -61,7 +62,8 @@ public interface StbDecoder {
         // Convert 8-bit to 16-bit
         ByteBuffer data8 = result.getData();
         int channels = result.getChannels();
-        ByteBuffer data16 = getAllocator().apply(result.getWidth() * result.getHeight() * channels * 2);
+        int size16 = StbLimits.checkedImageBufferSize(result.getWidth(), result.getHeight(), channels, 2);
+        ByteBuffer data16 = getAllocator().apply(size16);
 
         for (int i = 0; i < data8.remaining(); i++) {
             int val = Byte.toUnsignedInt(data8.get(i));

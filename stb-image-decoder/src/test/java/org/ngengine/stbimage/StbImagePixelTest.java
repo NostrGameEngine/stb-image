@@ -1,6 +1,7 @@
 package org.ngengine.stbimage;
 
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -20,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * Tests each image in index.txt against the corresponding expected binary file.
  */
 public class StbImagePixelTest {
+
 
     /** Maximum allowed difference per pixel channel  */
     public static final int PIXEL_TOLERANCE = 3;
