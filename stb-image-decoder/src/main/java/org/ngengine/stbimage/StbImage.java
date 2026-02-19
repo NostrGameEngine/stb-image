@@ -25,12 +25,23 @@ public class StbImage {
     private boolean unpremultiplyOnLoad = false;
     private boolean fillGifFirstFrameBackground = false;
 
+    @FunctionalInterface
+    public static interface StbDecoderInstancer {
+        public StbDecoder create(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically);
+    }
+
     private static class DecoderRegistration {
-        Class<? extends StbDecoder> decoderClass;
-        Predicate<ByteBuffer> formatChecker;
-        DecoderRegistration(Class<? extends StbDecoder> decoderClass, Predicate<ByteBuffer> formatChecker) {
-            this.decoderClass = decoderClass;
+        final StbDecoderInstancer instancer;
+        final Predicate<ByteBuffer> formatChecker;
+        final String format;
+        DecoderRegistration(String format, StbDecoderInstancer instancer, Predicate<ByteBuffer> formatChecker) {
+            this.instancer = instancer;
             this.formatChecker = formatChecker;
+            this.format = format.toUpperCase();
+        }
+
+        boolean isFormat(String fmt) {
+            return this.format.equals(fmt.toUpperCase());
         }
     }
 
@@ -39,31 +50,69 @@ public class StbImage {
     /**
      * Registers a decoder type and its format probe.
      *
-     * @param decoderClass decoder class with constructor (ByteBuffer, IntFunction, boolean)
+     * @param format format name of the decoder
+     * @param instancer decoder class with constructor (ByteBuffer, IntFunction, boolean)
      * @param formatChecker predicate that returns true when buffer matches decoder format
      */
-    public void registerDecoder(Class<? extends StbDecoder> decoderClass, Predicate<ByteBuffer> formatChecker) {
-        if(decoders.stream().anyMatch(reg -> reg.decoderClass.equals(decoderClass))) {
-            throw new IllegalArgumentException("Decoder already registered: " + decoderClass.getName());
+    public void registerDecoder(String format, StbDecoderInstancer instancer, Predicate<ByteBuffer> formatChecker) {
+        if(decoders.stream().anyMatch(reg -> reg.instancer.equals(instancer) || reg.isFormat(format))) {
+            throw new IllegalArgumentException("Decoder already registered: " + format);
         }
-        decoders.add(new DecoderRegistration(decoderClass, formatChecker));
+        decoders.add(new DecoderRegistration(format, instancer, formatChecker));
 
         // Ensure tga decoder is the last
         decoders.sort((a, b) -> {
-            if (a.decoderClass.equals(TgaDecoder.class)) return 1;
-            if (b.decoderClass.equals(TgaDecoder.class)) return -1;
+            if (a.isFormat("TGA")) return 1;
+            if (b.isFormat("TGA")) return -1;
             return 0;
         });
     }
 
     /**
-     * Unregisters a decoder previously added with {@link #registerDecoder(Class, Predicate)}.
+     * Unregisters a decoder previously added with {@link #registerDecoder(String, StbDecoderInstancer, Predicate)}.
      *
-     * @param decoderClass decoder class to remove
+     * @param format format name of the decoder to remove
      */
-    public void unregisterDecoder(Class<? extends StbDecoder> decoderClass) {
-        decoders.removeIf(reg -> reg.decoderClass.equals(decoderClass));
+    public void unregisterDecoder(String format) {
+        decoders.removeIf(reg -> reg.isFormat(format));
     }
+
+    /**
+     * Unregisters a decoder by its instancer reference.
+     * @param instancer decoder class reference to remove
+     */
+    public void unregisterDecoder(StbDecoderInstancer instancer) {
+        decoders.removeIf(reg -> reg.instancer.equals(instancer));
+    }
+
+    /**
+     * Unregisters all decoders, leaving the instance with no supported formats.
+     */
+    public void unregisterAllDecoders() {
+        decoders.clear();
+    }
+
+     /**
+      * Returns a list of registered decoder formats.
+      *
+      * @return list of format names
+      */
+     public List<String> getRegisteredFormats() {
+         List<String> formats = new ArrayList<>();
+         for (DecoderRegistration reg : decoders) {
+             formats.add(reg.format);
+         }
+         return formats;
+     }
+
+     /**
+      * Returns the number of registered decoders.
+      *
+      * @return decoder count
+      */
+     public int getDecoderCount() {
+         return decoders.size();
+     }
 
     /**
      * Creates an instance using heap allocation ({@link ByteBuffer#allocate(int)}).
@@ -79,15 +128,15 @@ public class StbImage {
      */
     public StbImage(IntFunction<ByteBuffer> allocator){
         this.allocator = allocator==null?ByteBuffer::allocate:allocator;
-        registerDecoder(PngDecoder.class, PngDecoder::isPng);
-        registerDecoder(JpegDecoder.class, JpegDecoder::isJpeg);
-        registerDecoder(BmpDecoder.class, BmpDecoder::isBmp);
-        registerDecoder(GifDecoder.class, GifDecoder::isGif);
-        registerDecoder(PnmDecoder.class, PnmDecoder::isPnm);
-        registerDecoder(PsdDecoder.class, PsdDecoder::isPsd);
-        registerDecoder(HdrDecoder.class, HdrDecoder::isHdr);
-        registerDecoder(PicDecoder.class, PicDecoder::isPic);
-        registerDecoder(TgaDecoder.class, TgaDecoder::isTga);
+        registerDecoder("PNG", PngDecoder::new, PngDecoder::isPng);
+        registerDecoder("JPEG", JpegDecoder::new, JpegDecoder::isJpeg);
+        registerDecoder("BMP", BmpDecoder::new, BmpDecoder::isBmp);
+        registerDecoder("GIF", GifDecoder::new, GifDecoder::isGif);
+        registerDecoder("PNM", PnmDecoder::new, PnmDecoder::isPnm);
+        registerDecoder("PSD", PsdDecoder::new, PsdDecoder::isPsd);
+        registerDecoder("HDR", HdrDecoder::new, HdrDecoder::isHdr);
+        registerDecoder("PIC", PicDecoder::new, PicDecoder::isPic);
+        registerDecoder("TGA", TgaDecoder::new, TgaDecoder::isTga);
     }
 
     /**
@@ -169,9 +218,7 @@ public class StbImage {
         for (DecoderRegistration reg : decoders) {
             if (reg.formatChecker.test(buffer)) {
                 try {
-                    StbDecoder decoder = reg.decoderClass.getDeclaredConstructor(
-                            ByteBuffer.class, IntFunction.class,
-                            boolean.class).newInstance(buffer, allocator, flipVertically);
+                    StbDecoder decoder = reg.instancer.create(buffer, allocator, flipVertically);
                     if (decoder instanceof PngDecoder) {
                         PngDecoder pngDecoder = (PngDecoder) decoder;
                         pngDecoder.setConvertIphonePngToRgb(convertIphonePngToRgb);
@@ -182,7 +229,7 @@ public class StbImage {
                     }
                     return decoder;
                 } catch (Exception e) {
-                    throw new RuntimeException("Failed to instantiate decoder: " + reg.decoderClass.getName(), e);
+                    throw new RuntimeException("Failed to instantiate decoder: " + reg.format, e);
                 }
             }
         }
