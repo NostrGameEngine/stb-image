@@ -53,8 +53,8 @@ subprojects {
                     url = projectUrl
                     licenses {
                         license {
-                            name = 'MIT License'
-                            url = 'https://opensource.org/licenses/MIT'
+                            name = 'Unlicense'
+                            url = 'https://unlicense.org/'
                         }
                     }
                     developers {
