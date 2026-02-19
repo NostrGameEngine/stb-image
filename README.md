@@ -9,7 +9,7 @@ This repository contains an experimental, pure-Java (Java 11+) port/fork of `stb
 
 Much of the codebase was initially produced with AI-assisted translation, then reviewed and patched by humans. The implementation is memory-safe in the usual Java sense (no unsafe memory operations), and it intentionally does not perform any filesystem access on its own. In practice, it should be safe to use as long as a safe allocator is passed to the API (the default is `ByteBuffer::allocate`, which is heap-based and GC-managed).
 
-That said, this is still an **experimental** project. For maximum stability, performance, and long-term compatibility, using the **official LWJGL3 native bindings** to the original C library is still recommended when possible.
+That said, this is still an **experimental** project. For maximum stability, performance, and long-term compatibility, using the [LWJGL3 native bindings](https://www.lwjgl.org/) to the original C library is still recommended when possible.
 
 This project is best suited for:
 
@@ -53,7 +53,7 @@ try {
 
 ## Unit tests and parity checks
 
-This repo includes a [large collection of reference images](src-image-decoder/src/test/resources/testData), covering a wide range of formats, features, and edge cases. The unit tests check also for pixel parity with images decoded with the [original stb_image C library (v2.30) included in this repo](stb-image-decoder/src/test/c/stb_image.h). 
+This repo includes a [large collection of reference images](stb-image-decoder/tree/master/stb-image-decoder/src/test/resources/testData/image), covering a wide range of formats, features, and edge cases. The unit tests check also for pixel parity with images decoded with the [original stb_image C library (v2.30) included in this repo](stb-image-decoder/src/test/c/). 
 These images have various licenses and are not suitable to be shipped in production, see [testData/README.md](stb-image-decoder/src/test/resources/testData/README.md) for details.
 
 
