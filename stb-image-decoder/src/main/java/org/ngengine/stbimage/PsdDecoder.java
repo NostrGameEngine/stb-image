@@ -3,52 +3,38 @@ package org.ngengine.stbimage;
 import java.nio.ByteBuffer;
 import java.util.function.IntFunction;
 
-
 /**
- * PSD decoder for composite image, 8/16-bit.
+ * PSD decoder for composited RGB view, 8/16-bit.
  */
-public class PsdDecoder implements StbDecoder{
+public class PsdDecoder implements StbDecoder {
 
-    // PSD signature "8BPS"
     private static final int PSD_SIGNATURE = 0x38425053;
-
-    // Color modes
-    private static final int MODE_BITMAP = 0;
-    private static final int MODE_GRAYSCALE = 1;
-    private static final int MODE_INDEXED = 2;
     private static final int MODE_RGB = 3;
-    private static final int MODE_CMYK = 4;
-    private static final int MODE_MULTICHANNEL = 7;
-    private static final int MODE_DUOTONE = 8;
-    private static final int MODE_LAB = 9;
 
-    private ByteBuffer buffer;
+    private final ByteBuffer buffer;
     private int pos;
-    private IntFunction<ByteBuffer> allocator;
-    private boolean flipVertically;
+    private final IntFunction<ByteBuffer> allocator;
+    private final boolean flipVertically;
 
     private int width;
     private int height;
     private int channels;
     private int bitsPerChannel;
     private int colorMode;
-    private int colorDepth;
-
 
     public static boolean isPsd(ByteBuffer buffer) {
         if (buffer.remaining() < 12) return false;
-        buffer=buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
-        int sig = buffer.getInt();
-        int version = buffer.getShort() & 0xFFFF;
-        return sig == 0x38425053 && (version == 1 || version == 2);
+        ByteBuffer probe = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
+        int sig = probe.getInt();
+        int version = probe.getShort() & 0xFFFF;
+        return sig == PSD_SIGNATURE && (version == 1 || version == 2);
     }
 
- 
     @Override
     public IntFunction<ByteBuffer> getAllocator() {
         return allocator;
     }
-    
+
     public PsdDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
         this.allocator = allocator;
@@ -58,183 +44,182 @@ public class PsdDecoder implements StbDecoder{
 
     @Override
     public StbImageInfo info() {
+        int saved = pos;
         try {
-            // Read signature
-            if (readU32BE() != PSD_SIGNATURE) {
-                return null;
-            }
-
-            // Skip version
-            readU16BE();
-
-            // Skip reserved
-            pos += 6;
-
-            // Read channels, height, width
-            int numChannels = readU16BE();
-            int h = readU32BE();
-            int w = readU32BE();
-
-            // Bits per channel
-            int bpc = readU16BE();
-
-            // Color mode
-            int cm = readU16BE();
-
-            int infoChannels = (numChannels >= 3) ? 3 : 1;
-
-            return new StbImageInfo(w, h, infoChannels, bpc == 16, StbImageInfo.ImageFormat.PSD);
-        } catch (Exception e) {
+            pos = 0;
+            parseHeader();
+            return new StbImageInfo(width, height, 4, bitsPerChannel == 16, StbImageInfo.ImageFormat.PSD);
+        } catch (RuntimeException e) {
             return null;
+        } finally {
+            pos = saved;
         }
     }
 
     @Override
     public StbImageResult load(int desiredChannels) {
-        // Read signature
+        pos = 0;
+        parseHeader();
+
+        StbImage.validateDimensions(width, height);
+
+        boolean is16Bit = bitsPerChannel == 16;
+        int bytesPerChannel = is16Bit ? 2 : 1;
+        int srcChannels = Math.min(channels, 4);
+
+        // stb PSD path decodes RGBA and then converts for req_comp.
+        ByteBuffer rgba = allocator.apply(width * height * 4 * bytesPerChannel);
+        fillOpaqueAlpha(rgba, is16Bit);
+
+        int compression = readU16BE();
+        if (compression == 0) {
+            decodeRaw(rgba, srcChannels, bytesPerChannel);
+        } else if (compression == 1) {
+            decodeRle(rgba, srcChannels, bytesPerChannel);
+        } else {
+            throw new StbFailureException("Unsupported PSD compression: " + compression);
+        }
+
+        rgba.limit(width * height * 4 * bytesPerChannel);
+        rgba.position(0);
+
+        int outChannels = (desiredChannels == 0) ? 4 : desiredChannels;
+        ByteBuffer out = StbImage.convertChannels(getAllocator(), rgba, 4, width, height, outChannels, is16Bit);
+        if (flipVertically) {
+            out = StbImage.verticalFlip(getAllocator(), out, width, height, outChannels, is16Bit);
+        }
+
+        return new StbImageResult(out, width, height, outChannels, desiredChannels, is16Bit, false);
+    }
+
+    private void parseHeader() {
         if (readU32BE() != PSD_SIGNATURE) {
             throw new StbFailureException("Not a PSD file");
         }
 
-        // Read version
         int version = readU16BE();
         if (version != 1 && version != 2) {
             throw new StbFailureException("Unsupported PSD version: " + version);
         }
 
-        // Skip reserved
-        pos += 6;
+        pos += 6; // reserved
 
-        // Read channels, height, width
         channels = readU16BE();
+        if (channels < 0 || channels > 16) {
+            throw new StbFailureException("Invalid PSD channel count");
+        }
         height = readU32BE();
         width = readU32BE();
 
-        StbImage.validateDimensions(width, height);
-
-        // Bits per channel
         bitsPerChannel = readU16BE();
+        if (bitsPerChannel != 8 && bitsPerChannel != 16) {
+            throw new StbFailureException("Unsupported PSD bit depth: " + bitsPerChannel);
+        }
 
-        // Color mode
         colorMode = readU16BE();
+        if (colorMode != MODE_RGB) {
+            throw new StbFailureException("Unsupported PSD color mode");
+        }
 
-        // Skip color mode data
         int colorModeDataLength = readU32BE();
         pos += colorModeDataLength;
 
-        // Skip layer/mask info (not supported for composite)
+        int imageResourcesLength = readU32BE();
+        pos += imageResourcesLength;
+
         int layerMaskDataLength = readU32BE();
         pos += layerMaskDataLength;
 
-        // Determine channels to read
-        int outChannels;
-        if (colorMode == MODE_RGB) {
-            outChannels = Math.min(channels, 3);
-        } else if (colorMode == MODE_GRAYSCALE) {
-            outChannels = 1;
-        } else if (colorMode == MODE_CMYK) {
-            outChannels = 4;
-        } else {
-            outChannels = Math.min(channels, 3);
+        if (pos > buffer.limit()) {
+            throw new StbFailureException("Corrupt PSD header");
         }
-
-        if (desiredChannels != 0) {
-            outChannels = Math.min(outChannels, desiredChannels);
-        }
-
-        // Determine bytes per channel
-        boolean is16Bit = (bitsPerChannel == 16);
-        int bytesPerChannel = is16Bit ? 2 : 1;
-
-        // Allocate output buffer
-        ByteBuffer output = allocator.apply(width * height * outChannels * bytesPerChannel);
-
-        // Read image data
-        // Compression: 0 = raw, 1 = RLE
-        int compression = readU16BE();
-
-        if (compression == 0) {
-            decodeUncompressed(output, outChannels, bytesPerChannel);
-        } else if (compression == 1) {
-            decodeRLE(output, outChannels, bytesPerChannel);
-        } else {
-            throw new StbFailureException("Unsupported compression: " + compression);
-        }
-
-        // Set limit to actual data size since we use absolute positioning
-        output.limit(width * height * outChannels * bytesPerChannel);
-
-        if (flipVertically) {
-            output = StbImage.verticalFlip(getAllocator(),output, width, height, outChannels, is16Bit);
-        }
-
-        return new StbImageResult(output, width, height, outChannels, desiredChannels, is16Bit, false);
     }
 
-    private void decodeUncompressed(ByteBuffer output, int outChannels, int bytesPerChannel) {
-        for (int c = 0; c < outChannels; c++) {
-            for (int y = 0; y < height; y++) {
-                for (int x = 0; x < width; x++) {
-                    int pos = (y * width + x) * outChannels * bytesPerChannel + c * bytesPerChannel;
-                    if (bytesPerChannel == 2) {
-                        output.putShort(pos, (short) readU16BE());
-                    } else {
-                        output.put(pos, (byte) readU8());
-                    }
-                }
+    private void fillOpaqueAlpha(ByteBuffer out, boolean is16Bit) {
+        int pixels = width * height;
+        if (is16Bit) {
+            for (int i = 0; i < pixels; i++) {
+                out.putShort((i * 8) + 6, (short) 0xFFFF);
+            }
+        } else {
+            for (int i = 0; i < pixels; i++) {
+                out.put((i * 4) + 3, (byte) 0xFF);
             }
         }
     }
 
-    private void decodeRLE(ByteBuffer output, int outChannels, int bytesPerChannel) {
-        // RLE compressed - read run lengths for each row of each channel
-        for (int c = 0; c < outChannels; c++) {
+    private void decodeRaw(ByteBuffer out, int srcChannels, int bytesPerChannel) {
+        for (int c = 0; c < srcChannels; c++) {
             for (int y = 0; y < height; y++) {
-                // Read run count for this row
-                int runCount = readU16BE();
-
-                int x = 0;
-                while (x < width && pos < buffer.limit() - 1) {
-                    int header = readU8();
-                    if (header >= 128) {
-                        // Run of repeated values
-                        int count = 256 - header + 1;
-                        int value;
-                        if (bytesPerChannel == 2) {
-                            value = readU16BE();
-                        } else {
-                            value = readU8();
-                        }
-
-                        for (int i = 0; i < count && x < width; i++) {
-                            int outPos = (y * width + x) * outChannels * bytesPerChannel + c * bytesPerChannel;
-                            if (bytesPerChannel == 2) {
-                                output.putShort(outPos, (short) value);
-                            } else {
-                                output.put(outPos, (byte) value);
-                            }
-                            x++;
-                        }
+                for (int x = 0; x < width; x++) {
+                    int dst = ((y * width + x) * 4 + c) * bytesPerChannel;
+                    if (bytesPerChannel == 2) {
+                        out.putShort(dst, (short) readU16BE());
                     } else {
-                        // Raw values
-                        int count = header + 1;
-                        for (int i = 0; i < count && x < width; i++) {
-                            int value;
-                            if (bytesPerChannel == 2) {
-                                value = readU16BE();
-                            } else {
-                                value = readU8();
-                            }
+                        out.put(dst, (byte) readU8());
+                    }
+                }
+            }
+        }
+        // skip any extra channels we don't output
+        int extra = channels - srcChannels;
+        if (extra > 0) {
+            long skip = (long) extra * width * height * bytesPerChannel;
+            pos += (int) skip;
+        }
+    }
 
-                            int outPos = (y * width + x) * outChannels * bytesPerChannel + c * bytesPerChannel;
-                            if (bytesPerChannel == 2) {
-                                output.putShort(outPos, (short) value);
-                            } else {
-                                output.put(outPos, (byte) value);
+    private void decodeRle(ByteBuffer out, int srcChannels, int bytesPerChannel) {
+        int rows = channels * height;
+        int[] rowLen = new int[rows];
+        for (int i = 0; i < rows; i++) {
+            rowLen[i] = readU16BE();
+        }
+
+        for (int c = 0; c < channels; c++) {
+            for (int y = 0; y < height; y++) {
+                int n = rowLen[c * height + y];
+                int rowEnd = pos + n;
+
+                if (c < srcChannels) {
+                    int x = 0;
+                    while (x < width && pos < rowEnd) {
+                        int header = readS8();
+                        if (header >= 0) {
+                            int count = header + 1;
+                            for (int i = 0; i < count && x < width && pos < rowEnd; i++) {
+                                int dst = ((y * width + x) * 4 + c) * bytesPerChannel;
+                                if (bytesPerChannel == 2) {
+                                    out.putShort(dst, (short) readU16BE());
+                                } else {
+                                    out.put(dst, (byte) readU8());
+                                }
+                                x++;
                             }
-                            x++;
+                        } else if (header != -128) {
+                            int count = 1 - header;
+                            if (bytesPerChannel == 2) {
+                                int v = readU16BE();
+                                for (int i = 0; i < count && x < width; i++) {
+                                    int dst = ((y * width + x) * 4 + c) * 2;
+                                    out.putShort(dst, (short) v);
+                                    x++;
+                                }
+                            } else {
+                                int v = readU8();
+                                for (int i = 0; i < count && x < width; i++) {
+                                    int dst = ((y * width + x) * 4 + c);
+                                    out.put(dst, (byte) v);
+                                    x++;
+                                }
+                            }
                         }
                     }
+                }
+
+                pos = rowEnd;
+                if (pos > buffer.limit()) {
+                    throw new StbFailureException("Corrupt PSD RLE data");
                 }
             }
         }
@@ -242,6 +227,10 @@ public class PsdDecoder implements StbDecoder{
 
     private int readU8() {
         return buffer.get(pos++) & 0xFF;
+    }
+
+    private int readS8() {
+        return buffer.get(pos++);
     }
 
     private int readU16BE() {

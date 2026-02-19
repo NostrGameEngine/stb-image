@@ -25,9 +25,12 @@ public class BmpDecoder implements StbDecoder{
     private int bitsPerPixel;
     private int channels;
     private int compression;
-    private int rowStride;
     private byte[] palette;
     private int paletteSize;
+    private int maskR;
+    private int maskG;
+    private int maskB;
+    private int maskA;
 
 
     public static boolean isBmp(ByteBuffer buffer) {
@@ -119,11 +122,14 @@ public class BmpDecoder implements StbDecoder{
                 height = readU16LE();
                 pos += 2; // planes
                 bitsPerPixel = readU16LE();
+                compression = BI_RGB;
                 paletteSize = 1 << bitsPerPixel;
                 break;
             case 40: // BITMAPINFOHEADER
-            case 52: // BITMAPV4HEADER
-            case 108: // BITMAPV5HEADER
+            case 52: // BITMAPV2INFOHEADER
+            case 56: // BITMAPV3INFOHEADER
+            case 108: // BITMAPV4HEADER
+            case 124: // BITMAPV5HEADER
                 width = readS32LE();
                 int heightTmp = readS32LE();
                 height = Math.abs(heightTmp);
@@ -134,9 +140,23 @@ public class BmpDecoder implements StbDecoder{
                 pos += 2; // planes
                 bitsPerPixel = readU16LE();
                 compression = readU32LE();
-                int imageSize = readU32LE();
-                pos += 16; // other fields
-                paletteSize = readU32LE();
+                readU32LE(); // imageSize
+                readS32LE(); // x ppm
+                readS32LE(); // y ppm
+                paletteSize = readU32LE(); // colors used
+                readU32LE(); // important colors
+                int extra = headerSize - 40;
+                if (extra >= 12) {
+                    maskR = readU32LE();
+                    maskG = readU32LE();
+                    maskB = readU32LE();
+                    extra -= 12;
+                }
+                if (extra >= 4) {
+                    maskA = readU32LE();
+                    extra -= 4;
+                }
+                pos += Math.max(0, extra);
                 break;
             default:
                 throw new StbFailureException("Unsupported BMP header size: " + headerSize);
@@ -162,7 +182,28 @@ public class BmpDecoder implements StbDecoder{
             throw new StbFailureException("Unsupported bits per pixel: " + bitsPerPixel);
         }
 
-        rowStride = ((width * bitsPerPixel + 31) >> 5) << 2;
+        int rowStride = ((width * bitsPerPixel + 31) >> 5) << 2;
+
+        if (compression != BI_RGB && compression != BI_RLE8 && compression != BI_RLE4 && compression != BI_BITFIELDS) {
+            throw new StbFailureException("Unsupported BMP compression: " + compression);
+        }
+        if (compression == BI_BITFIELDS && bitsPerPixel != 16 && bitsPerPixel != 32) {
+            throw new StbFailureException("BMP bitfields requires 16 or 32 bpp");
+        }
+        if (compression == BI_RGB) {
+            if (bitsPerPixel == 16 && (maskR | maskG | maskB) == 0) {
+                // stb default for 16-bit BI_RGB
+                maskR = 31 << 10;
+                maskG = 31 << 5;
+                maskB = 31;
+            } else if (bitsPerPixel == 32 && (maskR | maskG | maskB | maskA) == 0) {
+                // stb default for 32-bit BI_RGB
+                maskR = 0x00FF0000;
+                maskG = 0x0000FF00;
+                maskB = 0x000000FF;
+                maskA = 0xFF000000;
+            }
+        }
 
         // Read palette BEFORE seeking to pixel data (for palette images)
         // Palette is stored right after DIB header
@@ -210,7 +251,7 @@ public class BmpDecoder implements StbDecoder{
         } else if (compression == BI_RLE4) {
             output = decodeRLE4();
         } else {
-            output = decodeUncompressed();
+            output = decodeUncompressed(rowStride);
         }
 
         // Convert channels
@@ -238,7 +279,7 @@ public class BmpDecoder implements StbDecoder{
         return true;
     }
 
-    private ByteBuffer decodeUncompressed() {
+    private ByteBuffer decodeUncompressed(int rowStride) {
         ByteBuffer output = allocator.apply(width * height * channels);
 
         // BMP stores rows bottom-up, start from bottom (last row in file)
@@ -269,6 +310,18 @@ public class BmpDecoder implements StbDecoder{
                     if (channels == 4) {
                         output.put(pixelOffset + 3, palette[p + 3]); // A
                     }
+                } else if (bitsPerPixel == 16) {
+                    int v = readU16LE();
+                    int r = extractBits(v, maskR);
+                    int g = extractBits(v, maskG);
+                    int b = extractBits(v, maskB);
+                    int a = maskA != 0 ? extractBits(v, maskA) : 255;
+                    output.put(pixelOffset, (byte) r);
+                    output.put(pixelOffset + 1, (byte) g);
+                    output.put(pixelOffset + 2, (byte) b);
+                    if (channels == 4) {
+                        output.put(pixelOffset + 3, (byte) a);
+                    }
                 } else if (bitsPerPixel == 24) {
                     // Standard BMP uses BGR order, convert to RGB
                     byte b = (byte) readU8();
@@ -278,22 +331,29 @@ public class BmpDecoder implements StbDecoder{
                     output.put(pixelOffset + 1, g); // G
                     output.put(pixelOffset + 2, b); // B
                 } else if (bitsPerPixel == 32) {
-                    // Standard BMP uses BGRA order, convert to RGBA
-                    byte b = (byte) readU8();
-                    byte g = (byte) readU8();
-                    byte r = (byte) readU8();
-                    byte a = (byte) readU8();
-                    output.put(pixelOffset, r);     // R
-                    output.put(pixelOffset + 1, g); // G
-                    output.put(pixelOffset + 2, b); // B
-                    output.put(pixelOffset + 3, a); // A
+                    int v = readU32LE();
+                    if (compression == BI_BITFIELDS || (maskR | maskG | maskB | maskA) != 0) {
+                        int r = extractBits(v, maskR);
+                        int g = extractBits(v, maskG);
+                        int b = extractBits(v, maskB);
+                        int a = maskA != 0 ? extractBits(v, maskA) : 255;
+                        output.put(pixelOffset, (byte) r);
+                        output.put(pixelOffset + 1, (byte) g);
+                        output.put(pixelOffset + 2, (byte) b);
+                        output.put(pixelOffset + 3, (byte) a);
+                    } else {
+                        // Standard BMP uses BGRA order, convert to RGBA
+                        output.put(pixelOffset, (byte) ((v >> 16) & 0xFF));     // R
+                        output.put(pixelOffset + 1, (byte) ((v >> 8) & 0xFF)); // G
+                        output.put(pixelOffset + 2, (byte) (v & 0xFF)); // B
+                        output.put(pixelOffset + 3, (byte) ((v >> 24) & 0xFF)); // A
+                    }
                 }
             }
 
-            // Pad row to 4-byte boundary
-            int rowBytes = width * bitsPerPixel / 8;
-            int padding = (4 - (rowBytes % 4)) % 4;
-            pos += padding;
+            // Advance to row stride boundary.
+            int rowBytes = (width * bitsPerPixel + 7) >> 3;
+            pos += (rowStride - rowBytes);
         }
 
         // Set limit to actual data size since we use absolute positioning
@@ -480,5 +540,15 @@ public class BmpDecoder implements StbDecoder{
         int val = buffer.getInt(pos);
         pos += 4;
         return val;
+    }
+
+    private int extractBits(int value, int mask) {
+        if (mask == 0) return 0;
+        int shift = Integer.numberOfTrailingZeros(mask);
+        int bits = Integer.bitCount(mask);
+        int max = (1 << bits) - 1;
+        int v = (value & mask) >>> shift;
+        if (max == 0) return 0;
+        return (v * 255 + (max >> 1)) / max;
     }
 }

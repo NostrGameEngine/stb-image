@@ -96,7 +96,7 @@ public class PnmDecoder implements StbDecoder {
         output.position(0);
 
         if (flipVertically) {
-            output = StbImage.verticalFlip(getAllocator(),output, width, height, outChannels, is16Bit || isFloat);
+            output = StbImage.verticalFlip(getAllocator(), output, width, height, outChannels, bytesPerChannel);
         }
 
         return new StbImageResult(output, width, height, outChannels, desiredChannels, is16Bit, isFloat);
@@ -177,12 +177,21 @@ public class PnmDecoder implements StbDecoder {
                         val = (val * 65535) / maxValue;
                     }
                     int outPos = (y * width + x) * outChannels * 2;
-                    // Replicate grayscale to RGB channels, set A to max
-                    for (int c = 0; c < outChannels - 1; c++) {
-                        output.putShort(outPos + c * 2, (short) val);
+                    if (outChannels == 1) {
+                        output.putShort(outPos, (short) val);
+                    } else if (outChannels == 2) {
+                        output.putShort(outPos, (short) val);
+                        output.putShort(outPos + 2, (short) 65535);
+                    } else if (outChannels == 3) {
+                        output.putShort(outPos, (short) val);
+                        output.putShort(outPos + 2, (short) val);
+                        output.putShort(outPos + 4, (short) val);
+                    } else {
+                        output.putShort(outPos, (short) val);
+                        output.putShort(outPos + 2, (short) val);
+                        output.putShort(outPos + 4, (short) val);
+                        output.putShort(outPos + 6, (short) 65535);
                     }
-                    // Alpha channel = max value
-                    output.putShort(outPos + (outChannels - 1) * 2, (short) 65535);
                 }
             }
         } else {
@@ -194,12 +203,21 @@ public class PnmDecoder implements StbDecoder {
                         val = (val * 255) / maxValue;
                     }
                     int outPos = (y * width + x) * outChannels;
-                    // Replicate grayscale to RGB channels, set A to 255
-                    for (int c = 0; c < outChannels - 1; c++) {
-                        output.put(outPos + c, (byte) val);
+                    if (outChannels == 1) {
+                        output.put(outPos, (byte) val);
+                    } else if (outChannels == 2) {
+                        output.put(outPos, (byte) val);
+                        output.put(outPos + 1, (byte) 255);
+                    } else if (outChannels == 3) {
+                        output.put(outPos, (byte) val);
+                        output.put(outPos + 1, (byte) val);
+                        output.put(outPos + 2, (byte) val);
+                    } else {
+                        output.put(outPos, (byte) val);
+                        output.put(outPos + 1, (byte) val);
+                        output.put(outPos + 2, (byte) val);
+                        output.put(outPos + 3, (byte) 255);
                     }
-                    // Alpha channel = 255
-                    output.put(outPos + outChannels - 1, (byte) 255);
                 }
             }
         }

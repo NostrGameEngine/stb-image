@@ -3,49 +3,30 @@ package org.ngengine.stbimage;
 import java.nio.ByteBuffer;
 import java.util.function.IntFunction;
 
-
 /**
- * Radiance HDR decoder, RGBE to RGB float conversion.
+ * Radiance HDR decoder, RGBE to float conversion.
  */
 public class HdrDecoder implements StbDecoder {
 
-    private static final String HDR_SIGNATURE = "#?RADIANCE";
-    private static final String HDR_SIGNATURE_ALT = "#?RGBE";
+    private static final String HDR_SIGNATURE = "#?RADIANCE\n";
+    private static final String HDR_SIGNATURE_ALT = "#?RGBE\n";
 
-    private ByteBuffer buffer;
+    private final ByteBuffer buffer;
+    private final IntFunction<ByteBuffer> allocator;
+    private final boolean flipVertically;
+
     private int pos;
-    private IntFunction<ByteBuffer> allocator;
-    private boolean flipVertically;
-
     private int width;
     private int height;
 
-
     public static boolean isHdr(ByteBuffer buffer) {
-        if (buffer.remaining() < 11) return false;
-        buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
-        // Skip whitespace
-        while (buffer.hasRemaining()) {
-            char c = (char) (buffer.get() & 0xFF);
-            if (!Character.isWhitespace(c)) {
-                buffer.position(buffer.position() - 1);
-                break;
-            }
-        }
-        // Check for #?RADIANCE or #?RGBE
-        byte[] sig = new byte[10];
-        buffer.get(sig);
-
-        return (sig[0] == '#' && sig[1] == '?') &&
-                ((sig[2] == 'R' && sig[3] == 'A' && sig[4] == 'D' && sig[5] == 'I') ||
-                (sig[2] == 'R' && sig[3] == 'G' && sig[4] == 'B' && sig[5] == 'E'));
-       
+        ByteBuffer probe = buffer.duplicate();
+        probe.position(0);
+        return startsWith(probe, HDR_SIGNATURE) || startsWith(probe, HDR_SIGNATURE_ALT);
     }
 
-
-     
     public HdrDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
-        this.buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
+        this.buffer = buffer.duplicate();
         this.allocator = allocator;
         this.flipVertically = flipVertically;
         this.pos = 0;
@@ -53,58 +34,18 @@ public class HdrDecoder implements StbDecoder {
 
     @Override
     public StbImageInfo info() {
+        int savedPos = pos;
+        int savedW = width;
+        int savedH = height;
         try {
-            // Skip any initial whitespace
-            skipWhitespace();
-
-            String signature = readLine();
-            if (signature == null || !signature.startsWith("#?")) {
-                return null;
-            }
-            if (!signature.contains("RADIANCE") && !signature.contains("RGBE")) {
-                return null;
-            }
-
-            // Skip remaining header lines
-            String line;
-            while (true) {
-                line = readLine();
-                if (line == null) {
-                    return null;
-                }
-                line = line.trim();
-                if (line.length() == 0) {
-                    continue;
-                }
-                // Resolution line
-                if (line.contains("+X") || line.contains("-X")) {
-                    break;
-                }
-            }
-
-            // Read resolution
-            String[] parts = line.trim().split("\\s+");
-            if (parts.length < 4) {
-                return null;
-            }
-
-            // Format is: -Y height +X width or -X width +Y height
-            int w = 0, h = 0;
-            for (int i = 0; i < parts.length; i++) {
-                if (parts[i].equals("+X") || parts[i].equals("-X")) {
-                    w = Integer.parseInt(parts[i + 1]);
-                } else if (parts[i].equals("+Y") || parts[i].equals("-Y")) {
-                    h = Integer.parseInt(parts[i + 1]);
-                }
-            }
-
-            if (w <= 0 || h <= 0) {
-                return null;
-            }
-
-            return new StbImageInfo(w, h, 3, false, StbImageInfo.ImageFormat.HDR);
-        } catch (Exception e) {
+            parseHeader();
+            return new StbImageInfo(width, height, 3, false, StbImageInfo.ImageFormat.HDR);
+        } catch (RuntimeException e) {
             return null;
+        } finally {
+            pos = savedPos;
+            width = savedW;
+            height = savedH;
         }
     }
 
@@ -112,304 +53,267 @@ public class HdrDecoder implements StbDecoder {
     public IntFunction<ByteBuffer> getAllocator() {
         return allocator;
     }
+
     @Override
     public StbImageResult load(int desiredChannels) {
-        // Read header
-        readHeader();
+        pos = 0;
+        parseHeader();
 
         StbImage.validateDimensions(width, height);
 
-        // Allocate output buffer (3 channels float = 4 bytes each)
-        int outChannels = (desiredChannels == 0 || desiredChannels == 4) ? 3 : desiredChannels;
-        ByteBuffer output = allocator.apply(width * height * outChannels * 4);
-
-        // Check for new RLE format
-        boolean isRle = false;
-        String line = readLine();
-        if (line != null && line.contains("=")) {
-            // RLE format
-            isRle = true;
-        } else if (line != null) {
-            // Put back
-            pos -= line.length() + 1;
+        int reqComp = (desiredChannels == 0) ? 3 : desiredChannels;
+        if (reqComp < 1 || reqComp > 4) {
+            throw new StbFailureException("Bad desired channels: " + reqComp);
         }
 
-        if (isRle) {
-            // Skip format spec
-            while (true) {
-                line = readLine();
-                if (line == null || line.length() == 0) {
-                    break;
-                }
-                if (line.startsWith("-Y") || line.startsWith("+Y")) {
-                    break;
-                }
-            }
-        }
+        ByteBuffer output = allocator.apply(width * height * reqComp * 4);
 
-        // Decode based on format
-        if (isRle) {
-            decodeRLE(output, outChannels);
+        if (width < 8 || width >= 32768) {
+            decodeFlat(output, reqComp);
         } else {
-            decodeOldFormat(output, outChannels);
+            decodeRle(output, reqComp);
         }
 
-        // Set position to the actual amount of data written
-        output.position(width * height * outChannels * 4);
-        output.flip();
+        output.limit(width * height * reqComp * 4);
+        output.position(0);
 
         if (flipVertically) {
-            output = StbImage.verticalFlip(getAllocator(),output, width, height, outChannels, true);
+            output = StbImage.verticalFlip(getAllocator(), output, width, height, reqComp, 4);
         }
 
-        return new StbImageResult(output, width, height, outChannels, desiredChannels, false, true);
+        return new StbImageResult(output, width, height, reqComp, desiredChannels, false, true);
     }
 
-    private void readHeader() {
-        // Skip any initial whitespace
-        skipWhitespace();
-
-        // Check signature
-        String firstLine = readLine();
-        if (firstLine == null || !firstLine.startsWith("#?")) {
-            throw new StbFailureException("Invalid HDR file");
+    private void parseHeader() {
+        String token = readTokenLine();
+        if (!"#?RADIANCE".equals(token) && !"#?RGBE".equals(token)) {
+            throw new StbFailureException("not HDR");
         }
 
-        // Skip until we find resolution
-        String line = null;
+        boolean validFormat = false;
         while (true) {
-            line = readLine();
-            if (line == null) {
-                throw new StbFailureException("Invalid HDR file - no resolution");
-            }
-            if (line.contains("+X") || line.contains("-X")) {
+            token = readTokenLine();
+            if (token.isEmpty()) {
                 break;
             }
-        }
-
-        // Parse resolution - format varies
-
-        line = line.trim();
-        String[] parts = line.split("\\s+");
-
-        int orientationY = 1;
-        int orientationX = 1;
-
-        for (int i = 0; i < parts.length - 1; i++) {
-            if (parts[i].equals("-Y")) {
-                orientationY = -1;
-                height = Integer.parseInt(parts[i + 1]);
-            } else if (parts[i].equals("+Y")) {
-                height = Integer.parseInt(parts[i + 1]);
-            } else if (parts[i].equals("-X")) {
-                orientationX = -1;
-                width = Integer.parseInt(parts[i + 1]);
-            } else if (parts[i].equals("+X")) {
-                width = Integer.parseInt(parts[i + 1]);
+            if ("FORMAT=32-bit_rle_rgbe".equals(token)) {
+                validFormat = true;
             }
         }
 
-        if (width <= 0 || height <= 0) {
-            throw new StbFailureException("Invalid HDR dimensions");
+        if (!validFormat) {
+            throw new StbFailureException("Unsupported HDR format");
         }
+
+        token = readTokenLine();
+        ParsedResolution resolution = parseResolution(token);
+        width = resolution.width;
+        height = resolution.height;
     }
 
-    private void decodeOldFormat(ByteBuffer output, int outChannels) {
-        // Old format: scanlines without RLE
-        for (int y = 0; y < height; y++) {
-            // Check for new RLE marker
-            if (pos < buffer.limit() - 1) {
-                int check = buffer.get(pos) & 0xFF;
-                if (check == 0x00) {
-                    // Might be RLE - check next byte
-                    int check2 = buffer.get(pos + 1) & 0xFF;
-                    if (check2 == 0x00) {
-                        // It's RLE
-                        decodeOneScanlineRLE(output, y, outChannels);
-                        continue;
-                    }
-                }
-            }
+    private ParsedResolution parseResolution(String token) {
+        if (!token.startsWith("-Y ")) {
+            throw new StbFailureException("Unsupported HDR data layout");
+        }
 
-            // Old format: scanline of RGBE
+        int idx = 3;
+        int hStart = idx;
+        while (idx < token.length() && Character.isDigit(token.charAt(idx))) {
+            idx++;
+        }
+        if (idx == hStart) {
+            throw new StbFailureException("Invalid HDR dimensions");
+        }
+        int parsedHeight = Integer.parseInt(token.substring(hStart, idx));
+
+        while (idx < token.length() && token.charAt(idx) == ' ') {
+            idx++;
+        }
+
+        if (!token.startsWith("+X ", idx)) {
+            throw new StbFailureException("Unsupported HDR data layout");
+        }
+        idx += 3;
+
+        int wStart = idx;
+        while (idx < token.length() && Character.isDigit(token.charAt(idx))) {
+            idx++;
+        }
+        if (idx == wStart) {
+            throw new StbFailureException("Invalid HDR dimensions");
+        }
+
+        int parsedWidth = Integer.parseInt(token.substring(wStart, idx));
+        if (parsedWidth <= 0 || parsedHeight <= 0) {
+            throw new StbFailureException("Invalid HDR dimensions");
+        }
+
+        return new ParsedResolution(parsedWidth, parsedHeight);
+    }
+
+    private void decodeFlat(ByteBuffer output, int reqComp) {
+        for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 int r = readU8();
                 int g = readU8();
                 int b = readU8();
                 int e = readU8();
-
-                float[] rgb = rgbeToFloat(r, g, b, e);
-                int outPos = (y * width + x) * outChannels * 4;
-                output.putFloat(outPos, rgb[0]);
-                output.putFloat(outPos + 4, rgb[1]);
-                output.putFloat(outPos + 8, rgb[2]);
+                putConverted(output, (y * width + x) * reqComp * 4, reqComp, r, g, b, e);
             }
         }
     }
 
-    private void decodeRLE(ByteBuffer output, int outChannels) {
-        // RLE format: each channel is encoded separately
-        // Read each scanline
+    private void decodeRle(ByteBuffer output, int reqComp) {
+        byte[] scanline = null;
+
         for (int y = 0; y < height; y++) {
-            // Check for old format RLE marker
-            if (pos + 1 < buffer.limit() && buffer.get(pos) == 0 && buffer.get(pos + 1) == 2) {
-                // Old format RLE
-                decodeOneScanlineRLE(output, y, outChannels);
-            } else {
-                // New RLE format
-                int[] scanlines = new int[width * 4];
-                int[] channel = new int[width];
+            int c1 = readU8();
+            int c2 = readU8();
+            int len = readU8();
 
-                // Read each channel
-                for (int c = 0; c < 4; c++) {
-                    int xi = 0;
+            if (c1 != 2 || c2 != 2 || (len & 0x80) != 0) {
+                int e = readU8();
+                putConverted(output, 0, reqComp, c1, c2, len, e);
+                int totalPixels = width * height;
+                for (int pixel = 1; pixel < totalPixels; pixel++) {
+                    int r = readU8();
+                    int g = readU8();
+                    int b = readU8();
+                    int exp = readU8();
+                    putConverted(output, pixel * reqComp * 4, reqComp, r, g, b, exp);
+                }
+                return;
+            }
 
-                    while (xi < width) {
-                        if (pos >= buffer.limit()) break;
+            len = (len << 8) | readU8();
+            if (len != width) {
+                throw new StbFailureException("corrupt HDR");
+            }
 
-                        int header = readU8();
-                        if (header > 128) {
-                            // RLE run
-                            int count = header & 0x7F;
-                            int val = readU8();
-                            for (int i = 0; i < count && xi < width; i++) {
-                                channel[xi++] = val;
-                            }
-                        } else if (header > 0) {
-                            // Non-RLE run
-                            int count = header;
-                            for (int i = 0; i < count && xi < width; i++) {
-                                channel[xi++] = readU8();
-                            }
+            if (scanline == null) {
+                scanline = new byte[width * 4];
+            }
+
+            for (int k = 0; k < 4; k++) {
+                int i = 0;
+                while (i < width) {
+                    int count = readU8();
+                    int nLeft = width - i;
+                    if (count > 128) {
+                        int value = readU8();
+                        count -= 128;
+                        if (count == 0 || count > nLeft) {
+                            throw new StbFailureException("bad RLE data in HDR");
+                        }
+                        for (int z = 0; z < count; z++) {
+                            scanline[(i++ * 4) + k] = (byte) value;
+                        }
+                    } else {
+                        if (count == 0 || count > nLeft) {
+                            throw new StbFailureException("bad RLE data in HDR");
+                        }
+                        for (int z = 0; z < count; z++) {
+                            scanline[(i++ * 4) + k] = (byte) readU8();
                         }
                     }
-
-                    // Copy to scanline - reuse xi
-                    for (xi = 0; xi < width; xi++) {
-                        scanlines[xi * 4 + c] = channel[xi];
-                    }
                 }
+            }
 
-                // Convert to float
-                for (int xi = 0; xi < width; xi++) {
-                    int r = scanlines[xi * 4];
-                    int g = scanlines[xi * 4 + 1];
-                    int b = scanlines[xi * 4 + 2];
-                    int e = scanlines[xi * 4 + 3];
-
-                    float[] rgb = rgbeToFloat(r, g, b, e);
-                    int outPos = (y * width + xi) * outChannels * 4;
-                    output.putFloat(outPos, rgb[0]);
-                    if (outChannels > 1) {
-                        output.putFloat(outPos + 4, rgb[1]);
-                        output.putFloat(outPos + 8, rgb[2]);
-                    }
-                }
+            for (int x = 0; x < width; x++) {
+                int base = x * 4;
+                int r = Byte.toUnsignedInt(scanline[base]);
+                int g = Byte.toUnsignedInt(scanline[base + 1]);
+                int b = Byte.toUnsignedInt(scanline[base + 2]);
+                int e = Byte.toUnsignedInt(scanline[base + 3]);
+                putConverted(output, (y * width + x) * reqComp * 4, reqComp, r, g, b, e);
             }
         }
     }
 
-    private void decodeOneScanlineRLE(ByteBuffer output, int y, int outChannels) {
-        // Old format RLE
-        if (readU8() != 0 || readU8() != 2) {
-            throw new StbFailureException("Invalid RLE scanline");
-        }
-
-        int[] scanline = new int[width * 4];
-        int[] channel = new int[width];
-
-        // Each channel is RLE encoded
-        for (int c = 0; c < 4; c++) {
-            int xi = 0;
-            while (xi < width) {
-                if (pos >= buffer.limit()) break;
-
-                int count = readU8();
-                if (count > 128) {
-                    // RLE run
-                    count = (count & 0x7F) + 1;
-                    int val = readU8();
-                    for (int i = 0; i < count && xi < width; i++) {
-                        channel[xi++] = val;
-                    }
-                } else if (count > 0) {
-                    // Non-RLE
-                    for (int i = 0; i < count; i++) {
-                        channel[xi++] = readU8();
-                    }
+    private void putConverted(ByteBuffer output, int outBase, int reqComp, int r, int g, int b, int e) {
+        if (e != 0) {
+            float f = (float) Math.scalb(1.0f, e - (128 + 8));
+            if (reqComp <= 2) {
+                output.putFloat(outBase, (r + g + b) * f / 3.0f);
+                if (reqComp == 2) {
+                    output.putFloat(outBase + 4, 1.0f);
+                }
+            } else {
+                output.putFloat(outBase, r * f);
+                output.putFloat(outBase + 4, g * f);
+                output.putFloat(outBase + 8, b * f);
+                if (reqComp == 4) {
+                    output.putFloat(outBase + 12, 1.0f);
                 }
             }
-
-            // Copy to scanline - reuse xi
-            for (xi = 0; xi < width; xi++) {
-                scanline[xi * 4 + c] = channel[xi];
-            }
+            return;
         }
 
-        // Convert to float
-        for (int xi = 0; xi < width; xi++) {
-            int r = scanline[xi * 4];
-            int g = scanline[xi * 4 + 1];
-            int b = scanline[xi * 4 + 2];
-            int e = scanline[xi * 4 + 3];
-
-            float[] rgb = rgbeToFloat(r, g, b, e);
-            int outPos = (y * width + xi) * outChannels * 4;
-            output.putFloat(outPos, rgb[0]);
-            if (outChannels > 1) {
-                output.putFloat(outPos + 4, rgb[1]);
-                output.putFloat(outPos + 8, rgb[2]);
-            }
-        }
-    }
-
-    private float[] rgbeToFloat(int r, int g, int b, int e) {
-        float[] result = new float[3];
-
-        if (e == 0) {
-            result[0] = result[1] = result[2] = 0;
-            return result;
-        }
-
-        // Decode exponent
-        int exp = e - (128 + 8);
-        float scale = (float) Math.scalb(1.0f, exp);
-
-        // Decode mantissa
-        result[0] = ((r + 0.5f) / 256.0f) * scale;
-        result[1] = ((g + 0.5f) / 256.0f) * scale;
-        result[2] = ((b + 0.5f) / 256.0f) * scale;
-
-        return result;
-    }
-
-    private void skipWhitespace() {
-        while (pos < buffer.limit()) {
-            char c = (char) (buffer.get(pos) & 0xFF);
-            if (!Character.isWhitespace(c)) {
+        switch (reqComp) {
+            case 4:
+                output.putFloat(outBase + 12, 1.0f);
+                output.putFloat(outBase, 0.0f);
+                output.putFloat(outBase + 4, 0.0f);
+                output.putFloat(outBase + 8, 0.0f);
                 break;
-            }
-            pos++;
-        }
-    }
-
-    private String readLine() {
-        skipWhitespace();
-
-        StringBuilder sb = new StringBuilder();
-        while (pos < buffer.limit()) {
-            char c = (char) (buffer.get(pos++));
-            if (c == '\n' || c == '\r') {
+            case 3:
+                output.putFloat(outBase, 0.0f);
+                output.putFloat(outBase + 4, 0.0f);
+                output.putFloat(outBase + 8, 0.0f);
                 break;
-            }
-            sb.append(c);
+            case 2:
+                output.putFloat(outBase + 4, 1.0f);
+                output.putFloat(outBase, 0.0f);
+                break;
+            case 1:
+                output.putFloat(outBase, 0.0f);
+                break;
+            default:
+                throw new StbFailureException("Bad desired channels: " + reqComp);
         }
-
-        return sb.toString();
     }
 
     private int readU8() {
-        if (pos >= buffer.limit()) return 0;
+        if (pos >= buffer.limit()) {
+            throw new StbFailureException("corrupt HDR");
+        }
         return buffer.get(pos++) & 0xFF;
+    }
+
+    private String readTokenLine() {
+        StringBuilder sb = new StringBuilder();
+        while (pos < buffer.limit()) {
+            char c = (char) (buffer.get(pos++) & 0xFF);
+            if (c == '\n') {
+                break;
+            }
+            if (c != '\r') {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    private static boolean startsWith(ByteBuffer probe, String signature) {
+        byte[] bytes = signature.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        if (probe.remaining() < bytes.length) {
+            return false;
+        }
+        for (int i = 0; i < bytes.length; i++) {
+            if (probe.get(i) != bytes[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static final class ParsedResolution {
+        private final int width;
+        private final int height;
+
+        private ParsedResolution(int width, int height) {
+            this.width = width;
+            this.height = height;
+        }
     }
 }

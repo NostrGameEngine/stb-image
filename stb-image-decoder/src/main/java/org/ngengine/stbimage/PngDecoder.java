@@ -4,6 +4,7 @@ import java.nio.ByteBuffer;
 import java.util.function.IntFunction;
 import java.util.zip.DataFormatException;
 import java.util.zip.Inflater;
+import java.io.ByteArrayOutputStream;
 
 
 /**
@@ -17,6 +18,7 @@ public class PngDecoder implements StbDecoder {
     private static final int PNG_CHUNK_IEND = 0x49454E44;
     private static final int PNG_CHUNK_PLTE = 0x504C5445;
     private static final int PNG_CHUNK_tRNS = 0x74524E53;
+    private static final int PNG_CHUNK_CgBI = 0x43674249;
 
     // Color types
     private static final int CT_GREY = 0;
@@ -40,6 +42,8 @@ public class PngDecoder implements StbDecoder {
 
     private byte[] palette;
     private byte[] transparency;
+    private boolean convertIphonePngToRgb;
+    private boolean unpremultiplyOnLoad;
 
 
    
@@ -59,6 +63,13 @@ public class PngDecoder implements StbDecoder {
         this.pos = 0;
     }
 
+    public void setConvertIphonePngToRgb(boolean convertIphonePngToRgb) {
+        this.convertIphonePngToRgb = convertIphonePngToRgb;
+    }
+
+    public void setUnpremultiplyOnLoad(boolean unpremultiplyOnLoad) {
+        this.unpremultiplyOnLoad = unpremultiplyOnLoad;
+    }
 
     @Override
     public IntFunction<ByteBuffer> getAllocator() {
@@ -67,6 +78,7 @@ public class PngDecoder implements StbDecoder {
 
     @Override
     public StbImageInfo info() {
+        pos = 0;
         if (!readSignature()) {
             return null;
         }
@@ -89,22 +101,28 @@ public class PngDecoder implements StbDecoder {
 
     @Override
     public StbImageResult load(int desiredChannels) {
+        pos = 0;
         if (!readSignature()) {
             throw new StbFailureException("PNG signature not found");
         }
 
         boolean foundIHDR = false;
-        ByteBuffer idatData = null;
-        int idatLength = 0;
+        boolean isIphonePng = false;
+        ByteArrayOutputStream idat = new ByteArrayOutputStream(8192);
 
         while (hasRemaining()) {
             int length = readU32BE();
             int type = readU32BE();
-            int chunkStart = pos;
+            if (length < 0 || pos + length + 4 > buffer.limit()) {
+                throw new StbFailureException("Corrupt PNG chunk length");
+            }
 
             if (type == PNG_CHUNK_IHDR) {
                 readIHDR();
                 foundIHDR = true;
+            } else if (type == PNG_CHUNK_CgBI) {
+                isIphonePng = true;
+                skip(length);
             } else if (type == PNG_CHUNK_PLTE) {
                 readPLTE(length);
             } else if (type == PNG_CHUNK_tRNS) {
@@ -113,18 +131,10 @@ public class PngDecoder implements StbDecoder {
                 if (!foundIHDR) {
                     throw new StbFailureException("IDAT before IHDR");
                 }
-                if (idatData == null) {
-                    idatData = allocator.apply(length);
-                } else {
-                    int oldLimit = idatData.limit();
-                    ByteBuffer newData = allocator.apply(idatData.remaining() + length);
-                    newData.put(idatData);
-                    idatData = newData;
-                    idatData.limit(oldLimit + length);
-                    idatData.position(oldLimit);
-                }
-                readBytes(idatData, length);
-                idatLength += length;
+                byte[] tmp = new byte[length];
+                buffer.get(pos, tmp, 0, length);
+                idat.write(tmp, 0, length);
+                pos += length;
             } else if (type == PNG_CHUNK_IEND) {
                 break;
             } else {
@@ -132,39 +142,51 @@ public class PngDecoder implements StbDecoder {
             }
 
             skip(4); // CRC
-
-            if (idatData != null) {
-                idatData.flip();
-            }
         }
 
         if (!foundIHDR) {
             throw new StbFailureException("No IHDR chunk found");
         }
 
-        if (idatData == null || idatLength == 0) {
+        byte[] idatBytes = idat.toByteArray();
+        if (idatBytes.length == 0) {
             throw new StbFailureException("No IDAT chunk found");
         }
 
         // Decompress
-        ByteBuffer decompressed = decompress(idatData, width, height);
+        ByteBuffer decompressed = decompress(ByteBuffer.wrap(idatBytes), isIphonePng);
 
         // Decode image data
-        ByteBuffer imageData = decodeImageData(decompressed, width, height);
+        ByteBuffer imageData = (interlace == 1)
+            ? decodeInterlacedImageData(decompressed, width, height)
+            : decodeImageData(decompressed, width, height);
+        int srcChannels = getChannels();
+        if (transparency != null && (colorType == CT_GREY || colorType == CT_RGB)) {
+            imageData = applyColorKeyTransparency(imageData, srcChannels, width, height, bitDepth == 16);
+            srcChannels += 1;
+        }
+        if (isIphonePng && convertIphonePngToRgb && srcChannels > 2) {
+            deIphone(imageData, srcChannels, width, height, bitDepth == 16);
+        }
 
         // Convert to desired channels
-        int srcChannels = getChannels();
         if (desiredChannels == 0) {
             desiredChannels = (colorType == CT_GREY || colorType == CT_GREY_ALPHA) ? 1 : (colorType == CT_INDEXED ? 3 : srcChannels);
         }
 
-        ByteBuffer result = StbImage.convertChannels(getAllocator(),imageData, srcChannels, width, height, desiredChannels, bitDepth == 16);
+        ByteBuffer result = StbImage.convertChannels(getAllocator(), imageData, srcChannels, width, height, desiredChannels, bitDepth == 16);
 
-        if (flipVertically) {
-            result = StbImage.verticalFlip(getAllocator(),result, width, height, desiredChannels, bitDepth == 16);
+        boolean output16 = bitDepth == 16;
+        if (output16) {
+            result = convert16To8(result, width, height, desiredChannels);
+            output16 = false;
         }
 
-        return new StbImageResult(result, width, height, desiredChannels, desiredChannels, bitDepth == 16, false);
+        if (flipVertically) {
+            result = StbImage.verticalFlip(getAllocator(), result, width, height, desiredChannels, output16);
+        }
+
+        return new StbImageResult(result, width, height, desiredChannels, desiredChannels, output16, false);
     }
 
     private boolean readSignature() {
@@ -191,6 +213,15 @@ public class PngDecoder implements StbDecoder {
         }
         if (colorType > 6) {
             throw new StbFailureException("Invalid color type: " + colorType);
+        }
+        if (compression != 0) {
+            throw new StbFailureException("Unsupported PNG compression method: " + compression);
+        }
+        if (filter != 0) {
+            throw new StbFailureException("Unsupported PNG filter method: " + filter);
+        }
+        if (interlace != 0 && interlace != 1) {
+            throw new StbFailureException("Unsupported PNG interlace method: " + interlace);
         }
     }
 
@@ -229,15 +260,12 @@ public class PngDecoder implements StbDecoder {
         }
     }
 
-    private ByteBuffer decompress(ByteBuffer compressed, int width, int height) {
-        Inflater inflater = new Inflater();
+    private ByteBuffer decompress(ByteBuffer compressed, boolean rawDeflate) {
+        Inflater inflater = new Inflater(rawDeflate);
         compressed.rewind();
         byte[] input = new byte[compressed.remaining()];
         compressed.get(input);
         inflater.setInput(input);
-
-        int scanlineSize = getScanlineSize(width);
-        int totalSize = height * scanlineSize;
 
         try {
             // Use a larger buffer and inflate until finished
@@ -253,13 +281,7 @@ public class PngDecoder implements StbDecoder {
                 }
                 baos.write(buffer, 0, n);
             }
-            byte[] decompressed = baos.toByteArray();
-
-            // Copy to output with correct size
-            byte[] finalOutput = new byte[totalSize];
-            System.arraycopy(decompressed, 0, finalOutput, 0, Math.min(decompressed.length, totalSize));
-
-            return ByteBuffer.wrap(finalOutput);
+            return ByteBuffer.wrap(baos.toByteArray());
         } catch (DataFormatException e) {
             throw new StbFailureException("Zlib decompression failed: " + e.getMessage());
         } finally {
@@ -299,6 +321,7 @@ public class PngDecoder implements StbDecoder {
         int bytesPerChannel = bitDepth == 16 ? 2 : 1;
         int outSize = width * height * channels * bytesPerChannel;
         ByteBuffer output = allocator.apply(outSize);
+        int filterBytesPerPixel = getFilterBytesPerPixel();
 
         int scanlineSize = getScanlineSize(width);
         byte[] prevScanline = new byte[scanlineSize];
@@ -311,7 +334,7 @@ public class PngDecoder implements StbDecoder {
             }
 
             // Unfilter
-            int stride = channels * bytesPerChannel;
+            int stride = filterBytesPerPixel;
             switch (filterType) {
                 case 0: // None
                     break;
@@ -357,6 +380,178 @@ public class PngDecoder implements StbDecoder {
         output.limit(outSize);
         output.position(0);
         return output;
+    }
+
+    private ByteBuffer decodeInterlacedImageData(ByteBuffer data, int width, int height) {
+        int channels = getChannels();
+        int bytesPerChannel = bitDepth == 16 ? 2 : 1;
+        ByteBuffer output = allocator.apply(width * height * channels * bytesPerChannel);
+        int bitsPerPixel = getBitsPerPixel();
+        int filterBytesPerPixel = getFilterBytesPerPixel();
+
+        int[] xOrig = {0, 4, 0, 2, 0, 1, 0};
+        int[] yOrig = {0, 0, 4, 0, 2, 0, 1};
+        int[] xStep = {8, 8, 4, 4, 2, 2, 1};
+        int[] yStep = {8, 8, 8, 4, 4, 2, 2};
+
+        for (int pass = 0; pass < 7; pass++) {
+            int pw = (width - xOrig[pass] + xStep[pass] - 1) / xStep[pass];
+            int ph = (height - yOrig[pass] + yStep[pass] - 1) / yStep[pass];
+            if (pw <= 0 || ph <= 0) {
+                continue;
+            }
+
+            int scanlineSize = ((bitsPerPixel * pw + 7) >> 3) + 1;
+            byte[] prev = new byte[scanlineSize - 1];
+            byte[] cur = new byte[scanlineSize - 1];
+            ByteBuffer rowOut = allocator.apply(pw * channels * bytesPerChannel);
+
+            for (int py = 0; py < ph; py++) {
+                int filterType = data.get() & 0xFF;
+                for (int i = 0; i < scanlineSize - 1; i++) {
+                    cur[i] = data.get();
+                }
+
+                switch (filterType) {
+                    case 0:
+                        break;
+                    case 1:
+                        for (int i = 0; i < cur.length; i++) {
+                            int left = (i >= filterBytesPerPixel) ? cur[i - filterBytesPerPixel] : 0;
+                            cur[i] = (byte) ((cur[i] & 0xFF) + (left & 0xFF));
+                        }
+                        break;
+                    case 2:
+                        for (int i = 0; i < cur.length; i++) {
+                            cur[i] = (byte) ((cur[i] & 0xFF) + (prev[i] & 0xFF));
+                        }
+                        break;
+                    case 3:
+                        for (int i = 0; i < cur.length; i++) {
+                            int left = (i >= filterBytesPerPixel) ? cur[i - filterBytesPerPixel] : 0;
+                            int up = prev[i] & 0xFF;
+                            cur[i] = (byte) ((cur[i] & 0xFF) + (((left & 0xFF) + up) >> 1));
+                        }
+                        break;
+                    case 4:
+                        for (int i = 0; i < cur.length; i++) {
+                            int a = (i >= filterBytesPerPixel) ? cur[i - filterBytesPerPixel] & 0xFF : 0;
+                            int b = prev[i] & 0xFF;
+                            int c = (i >= filterBytesPerPixel) ? prev[i - filterBytesPerPixel] & 0xFF : 0;
+                            cur[i] = (byte) ((cur[i] & 0xFF) + paethPredictor(a, b, c));
+                        }
+                        break;
+                    default:
+                        throw new StbFailureException("Invalid PNG filter");
+                }
+
+                rowOut.clear();
+                convertScanline(cur, rowOut, 0, pw, channels, bytesPerChannel);
+                for (int px = 0; px < pw; px++) {
+                    int dstX = xOrig[pass] + px * xStep[pass];
+                    int dstY = yOrig[pass] + py * yStep[pass];
+                    int dstBase = (dstY * width + dstX) * channels * bytesPerChannel;
+                    int srcBase = px * channels * bytesPerChannel;
+                    for (int i = 0; i < channels * bytesPerChannel; i++) {
+                        output.put(dstBase + i, rowOut.get(srcBase + i));
+                    }
+                }
+
+                byte[] t = prev;
+                prev = cur;
+                cur = t;
+            }
+        }
+
+        output.limit(width * height * channels * bytesPerChannel);
+        output.position(0);
+        return output;
+    }
+
+    private ByteBuffer convert16To8(ByteBuffer src16, int width, int height, int channels) {
+        int count = width * height * channels;
+        ByteBuffer out = allocator.apply(count);
+        for (int i = 0; i < count; i++) {
+            int v = Short.toUnsignedInt(src16.getShort(i * 2));
+            out.put(i, (byte) (v >> 8));
+        }
+        out.limit(count);
+        out.position(0);
+        return out;
+    }
+
+    private void deIphone(ByteBuffer data, int channels, int width, int height, boolean is16Bit) {
+        int pixelCount = width * height;
+        if (!is16Bit) {
+            if (channels == 3) {
+                for (int i = 0; i < pixelCount; i++) {
+                    int p = i * 3;
+                    byte t = data.get(p);
+                    data.put(p, data.get(p + 2));
+                    data.put(p + 2, t);
+                }
+            } else if (channels == 4) {
+                if (unpremultiplyOnLoad) {
+                    for (int i = 0; i < pixelCount; i++) {
+                        int p = i * 4;
+                        int a = Byte.toUnsignedInt(data.get(p + 3));
+                        int t = Byte.toUnsignedInt(data.get(p));
+                        if (a != 0) {
+                            int half = a / 2;
+                            int b = Byte.toUnsignedInt(data.get(p + 2));
+                            int g = Byte.toUnsignedInt(data.get(p + 1));
+                            data.put(p, (byte) ((b * 255 + half) / a));
+                            data.put(p + 1, (byte) ((g * 255 + half) / a));
+                            data.put(p + 2, (byte) ((t * 255 + half) / a));
+                        } else {
+                            data.put(p, data.get(p + 2));
+                            data.put(p + 2, (byte) t);
+                        }
+                    }
+                } else {
+                    for (int i = 0; i < pixelCount; i++) {
+                        int p = i * 4;
+                        byte t = data.get(p);
+                        data.put(p, data.get(p + 2));
+                        data.put(p + 2, t);
+                    }
+                }
+            }
+            return;
+        }
+
+        int stride = channels * 2;
+        for (int i = 0; i < pixelCount; i++) {
+            int p = i * stride;
+            short t = data.getShort(p);
+            data.putShort(p, data.getShort(p + 4));
+            data.putShort(p + 4, t);
+        }
+    }
+
+    private int getFilterBytesPerPixel() {
+        int rawChannels;
+        switch (colorType) {
+            case CT_GREY:
+            case CT_INDEXED:
+                rawChannels = 1;
+                break;
+            case CT_RGB:
+                rawChannels = 3;
+                break;
+            case CT_GREY_ALPHA:
+                rawChannels = 2;
+                break;
+            case CT_RGBA:
+                rawChannels = 4;
+                break;
+            default:
+                rawChannels = 1;
+                break;
+        }
+        int bits = bitDepth * rawChannels;
+        int bytes = (bits + 7) >> 3;
+        return Math.max(1, bytes);
     }
 
     private void convertScanline(byte[] scanline, ByteBuffer output, int y, int width, int channels, int bytesPerChannel) {
@@ -537,6 +732,70 @@ public class PngDecoder implements StbDecoder {
         return c;
     }
 
+    private ByteBuffer applyColorKeyTransparency(ByteBuffer src, int srcChannels, int width, int height, boolean is16Bit) {
+        int bytesPerChannel = is16Bit ? 2 : 1;
+        int dstChannels = srcChannels + 1;
+        ByteBuffer out = allocator.apply(width * height * dstChannels * bytesPerChannel);
+        int max = is16Bit ? 0xFFFF : 0xFF;
+
+        int grayKey = -1;
+        int rKey = -1;
+        int gKey = -1;
+        int bKey = -1;
+        if (srcChannels == 1 && transparency.length >= 2) {
+            int raw = ((transparency[0] & 0xFF) << 8) | (transparency[1] & 0xFF);
+            grayKey = is16Bit ? raw : to8bit(raw);
+        } else if (srcChannels == 3 && transparency.length >= 6) {
+            int rr = ((transparency[0] & 0xFF) << 8) | (transparency[1] & 0xFF);
+            int gg = ((transparency[2] & 0xFF) << 8) | (transparency[3] & 0xFF);
+            int bb = ((transparency[4] & 0xFF) << 8) | (transparency[5] & 0xFF);
+            rKey = is16Bit ? rr : to8bit(rr);
+            gKey = is16Bit ? gg : to8bit(gg);
+            bKey = is16Bit ? bb : to8bit(bb);
+        }
+
+        for (int i = 0; i < width * height; i++) {
+            int s = i * srcChannels * bytesPerChannel;
+            int d = i * dstChannels * bytesPerChannel;
+            if (srcChannels == 1) {
+                int g = is16Bit ? Short.toUnsignedInt(src.getShort(s)) : Byte.toUnsignedInt(src.get(s));
+                putChannel(out, d, 0, g, is16Bit);
+                putChannel(out, d, 1, g == grayKey ? 0 : max, is16Bit);
+            } else {
+                int r = is16Bit ? Short.toUnsignedInt(src.getShort(s)) : Byte.toUnsignedInt(src.get(s));
+                int g = is16Bit ? Short.toUnsignedInt(src.getShort(s + bytesPerChannel)) : Byte.toUnsignedInt(src.get(s + 1));
+                int b = is16Bit ? Short.toUnsignedInt(src.getShort(s + bytesPerChannel * 2)) : Byte.toUnsignedInt(src.get(s + 2));
+                putChannel(out, d, 0, r, is16Bit);
+                putChannel(out, d, 1, g, is16Bit);
+                putChannel(out, d, 2, b, is16Bit);
+                boolean transparentPixel = r == rKey && g == gKey && b == bKey;
+                putChannel(out, d, 3, transparentPixel ? 0 : max, is16Bit);
+            }
+        }
+
+        out.limit(width * height * dstChannels * bytesPerChannel);
+        out.position(0);
+        return out;
+    }
+
+    private int to8bit(int value16) {
+        if (bitDepth == 16) {
+            return (value16 >> 8) & 0xFF;
+        }
+        int maxIn = (1 << bitDepth) - 1;
+        int low = value16 & maxIn;
+        return (low * 255) / maxIn;
+    }
+
+    private void putChannel(ByteBuffer dst, int base, int channel, int value, boolean is16Bit) {
+        int off = base + (is16Bit ? channel * 2 : channel);
+        if (is16Bit) {
+            dst.putShort(off, (short) value);
+        } else {
+            dst.put(off, (byte) value);
+        }
+    }
+
     private int readU8() {
         return buffer.get(pos++) & 0xFF;
     }
@@ -557,10 +816,4 @@ public class PngDecoder implements StbDecoder {
         return pos < buffer.limit();
     }
 
-    private void readBytes(ByteBuffer dest, int length) {
-        byte[] bytes = new byte[length];
-        buffer.get(pos, bytes);
-        pos += length;
-        dest.put(bytes);
-    }
 }

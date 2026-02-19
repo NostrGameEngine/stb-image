@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    int output_channels = channels;
+    int output_channels = req_channels > 0 ? req_channels : channels;
 
     // Write binary format: width(4 bytes) + height(4 bytes) + channels(4 bytes) + pixel data
     FILE *out = fopen(output_path, "wb");

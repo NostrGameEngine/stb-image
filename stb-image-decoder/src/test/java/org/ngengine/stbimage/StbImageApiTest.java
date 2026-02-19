@@ -2,6 +2,10 @@ package org.ngengine.stbimage;
 
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -23,6 +27,65 @@ public class StbImageApiTest {
     @Test
     void testMaxDimensions() {
         assertEquals(1 << 24, StbImage.STBI_MAX_DIMENSIONS);
+    }
+
+    @Test
+    void testIphonePngTogglesDefaultOff() {
+        StbImage stb = new StbImage();
+        assertFalse(stb.isConvertIphonePngToRgb());
+        assertFalse(stb.isUnpremultiplyOnLoad());
+    }
+
+    @Test
+    void testIphonePngTogglesCanBeConfigured() {
+        StbImage stb = new StbImage();
+        stb.setConvertIphonePngToRgb(true);
+        stb.setUnpremultiplyOnLoad(true);
+        assertTrue(stb.isConvertIphonePngToRgb());
+        assertTrue(stb.isUnpremultiplyOnLoad());
+    }
+
+    @Test
+    void testIphonePngTogglesAreWiredToPngDecoder() throws Exception {
+        StbImage stb = new StbImage();
+        stb.setConvertIphonePngToRgb(true);
+        stb.setUnpremultiplyOnLoad(true);
+
+        ByteBuffer pngSigOnly = ByteBuffer.wrap(new byte[] {
+                (byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+                0, 0, 0, 0
+        });
+
+        StbDecoder decoder = stb.getDecoder(pngSigOnly, false);
+        assertTrue(decoder instanceof PngDecoder);
+
+        Field convert = PngDecoder.class.getDeclaredField("convertIphonePngToRgb");
+        convert.setAccessible(true);
+        Field unprem = PngDecoder.class.getDeclaredField("unpremultiplyOnLoad");
+        unprem.setAccessible(true);
+
+        assertTrue(convert.getBoolean(decoder));
+        assertTrue(unprem.getBoolean(decoder));
+    }
+
+    @Test
+    void testPngDeIphoneUnpremultiplyMatchesStbFormula() throws Exception {
+        PngDecoder decoder = new PngDecoder(ByteBuffer.allocate(0), ByteBuffer::allocate, false);
+        decoder.setUnpremultiplyOnLoad(true);
+        Method deIphone = PngDecoder.class.getDeclaredMethod(
+                "deIphone", ByteBuffer.class, int.class, int.class, int.class, boolean.class);
+        deIphone.setAccessible(true);
+
+        ByteBuffer rgba = ByteBuffer.wrap(new byte[] {
+                64, 32, (byte) 128, (byte) 128
+        });
+        deIphone.invoke(decoder, rgba, 4, 1, 1, false);
+
+        // stb formula: r=(b*255+half)/a, g=(g*255+half)/a, b=(old_r*255+half)/a
+        assertEquals((byte) 255, rgba.get(0));
+        assertEquals((byte) 64, rgba.get(1));
+        assertEquals((byte) 128, rgba.get(2));
+        assertEquals((byte) 128, rgba.get(3));
     }
 
  
@@ -67,6 +130,73 @@ public class StbImageApiTest {
         ByteBuffer result = StbImage.convertChannels(ByteBuffer::allocate, src, 3, 2, 1, 3, false);
 
         assertNotNull(result);
+    }
+
+    @Test
+    void testConvertChannelsMatrix8BitMatchesStbRules() {
+        int width = 2;
+        int height = 1;
+        for (int src = 1; src <= 4; src++) {
+            for (int dst = 1; dst <= 4; dst++) {
+                byte[] input = new byte[width * height * src];
+                for (int i = 0; i < input.length; i++) {
+                    input[i] = (byte) (10 + i * 17);
+                }
+
+                ByteBuffer out = StbImage.convertChannels(ByteBuffer::allocate, ByteBuffer.wrap(input), src, width, height, dst, false);
+                byte[] actual = new byte[width * height * dst];
+                out.get(actual);
+                byte[] expected = expectedConvert8(input, src, dst, width * height);
+                assertArrayEquals(expected, actual, "8-bit convert mismatch src=" + src + " dst=" + dst);
+            }
+        }
+    }
+
+    @Test
+    void testConvertChannelsMatrix16BitMatchesStbRules() {
+        int width = 2;
+        int height = 1;
+        for (int src = 1; src <= 4; src++) {
+            for (int dst = 1; dst <= 4; dst++) {
+                int pixels = width * height;
+                short[] inputShorts = new short[pixels * src];
+                for (int i = 0; i < inputShorts.length; i++) {
+                    inputShorts[i] = (short) (1000 + i * 1234);
+                }
+                ByteBuffer in = ByteBuffer.allocate(inputShorts.length * 2);
+                for (short v : inputShorts) {
+                    in.putShort(v);
+                }
+                in.flip();
+
+                ByteBuffer out = StbImage.convertChannels(ByteBuffer::allocate, in, src, width, height, dst, true);
+                short[] actual = new short[pixels * dst];
+                for (int i = 0; i < actual.length; i++) {
+                    actual[i] = out.getShort(i * 2);
+                }
+                short[] expected = expectedConvert16(inputShorts, src, dst, pixels);
+                assertArrayEquals(expected, actual, "16-bit convert mismatch src=" + src + " dst=" + dst);
+            }
+        }
+    }
+
+    @Test
+    void testVerticalFlipFloatChannels() {
+        ByteBuffer src = ByteBuffer.allocate(2 * 2 * 3 * 4);
+        float[] vals = new float[] {
+            1, 2, 3, 4, 5, 6,
+            7, 8, 9, 10, 11, 12
+        };
+        for (float v : vals) {
+            src.putFloat(v);
+        }
+        src.flip();
+        ByteBuffer flipped = StbImage.verticalFlip(ByteBuffer::allocate, src, 2, 2, 3, 4);
+        float[] actual = new float[12];
+        for (int i = 0; i < actual.length; i++) {
+            actual[i] = flipped.getFloat(i * 4);
+        }
+        assertArrayEquals(new float[] {7, 8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6}, actual);
     }
 
     @Test
@@ -176,6 +306,29 @@ public class StbImageApiTest {
     }
 
     @Test
+    void testPicDecoderFixtureUncompressedRgb() throws IOException {
+        byte[] pic = loadResourceBytes("testData/image/minimal.pic");
+        StbImage stb = new StbImage();
+        StbDecoder decoder = stb.getDecoder(ByteBuffer.wrap(pic), false);
+        assertTrue(decoder instanceof PicDecoder);
+
+        StbImageInfo info = decoder.info();
+        assertEquals(1, info.getWidth());
+        assertEquals(1, info.getHeight());
+        assertEquals(3, info.getChannels());
+        assertEquals(StbImageInfo.ImageFormat.PIC, info.getFormat());
+
+        StbImageResult result = decoder.load(0);
+        assertEquals(3, result.getChannels());
+        assertEquals(1, result.getWidth());
+        assertEquals(1, result.getHeight());
+        ByteBuffer data = result.getData();
+        assertEquals(10, Byte.toUnsignedInt(data.get(0)));
+        assertEquals(20, Byte.toUnsignedInt(data.get(1)));
+        assertEquals(30, Byte.toUnsignedInt(data.get(2)));
+    }
+
+    @Test
     void testStbFailureException() {
         StbFailureException ex = new StbFailureException("test error");
 
@@ -185,5 +338,110 @@ public class StbImageApiTest {
 
         StbFailureException exUser = new StbFailureException("user msg", true);
         assertTrue(exUser.isUserMessage());
+    }
+
+    private static byte[] loadResourceBytes(String path) throws IOException {
+        try (InputStream in = StbImageApiTest.class.getClassLoader().getResourceAsStream(path)) {
+            assertNotNull(in, "Missing resource: " + path);
+            return in.readAllBytes();
+        }
+    }
+
+    private static byte[] expectedConvert8(byte[] input, int srcChannels, int dstChannels, int pixels) {
+        byte[] out = new byte[pixels * dstChannels];
+        for (int p = 0; p < pixels; p++) {
+            int s = p * srcChannels;
+            int d = p * dstChannels;
+            int c0 = Byte.toUnsignedInt(input[s]);
+            int c1 = srcChannels > 1 ? Byte.toUnsignedInt(input[s + 1]) : 0;
+            int c2 = srcChannels > 2 ? Byte.toUnsignedInt(input[s + 2]) : 0;
+            int c3 = srcChannels > 3 ? Byte.toUnsignedInt(input[s + 3]) : 0;
+            int y = ((c0 * 77) + (c1 * 150) + (29 * c2)) >> 8;
+
+            switch ((srcChannels << 3) + dstChannels) {
+                case (1 << 3) + 2:
+                    out[d] = (byte) c0; out[d + 1] = (byte) 255; break;
+                case (1 << 3) + 3:
+                    out[d] = (byte) c0; out[d + 1] = (byte) c0; out[d + 2] = (byte) c0; break;
+                case (1 << 3) + 4:
+                    out[d] = (byte) c0; out[d + 1] = (byte) c0; out[d + 2] = (byte) c0; out[d + 3] = (byte) 255; break;
+                case (2 << 3) + 1:
+                    out[d] = (byte) c0; break;
+                case (2 << 3) + 3:
+                    out[d] = (byte) c0; out[d + 1] = (byte) c0; out[d + 2] = (byte) c0; break;
+                case (2 << 3) + 4:
+                    out[d] = (byte) c0; out[d + 1] = (byte) c0; out[d + 2] = (byte) c0; out[d + 3] = (byte) c1; break;
+                case (3 << 3) + 4:
+                    out[d] = (byte) c0; out[d + 1] = (byte) c1; out[d + 2] = (byte) c2; out[d + 3] = (byte) 255; break;
+                case (3 << 3) + 1:
+                    out[d] = (byte) y; break;
+                case (3 << 3) + 2:
+                    out[d] = (byte) y; out[d + 1] = (byte) 255; break;
+                case (4 << 3) + 1:
+                    out[d] = (byte) y; break;
+                case (4 << 3) + 2:
+                    out[d] = (byte) y; out[d + 1] = (byte) c3; break;
+                case (4 << 3) + 3:
+                    out[d] = (byte) c0; out[d + 1] = (byte) c1; out[d + 2] = (byte) c2; break;
+                case (1 << 3) + 1:
+                case (2 << 3) + 2:
+                case (3 << 3) + 3:
+                case (4 << 3) + 4:
+                    System.arraycopy(input, s, out, d, dstChannels);
+                    break;
+                default:
+                    throw new IllegalStateException("bad combo");
+            }
+        }
+        return out;
+    }
+
+    private static short[] expectedConvert16(short[] input, int srcChannels, int dstChannels, int pixels) {
+        short[] out = new short[pixels * dstChannels];
+        for (int p = 0; p < pixels; p++) {
+            int s = p * srcChannels;
+            int d = p * dstChannels;
+            int c0 = Short.toUnsignedInt(input[s]);
+            int c1 = srcChannels > 1 ? Short.toUnsignedInt(input[s + 1]) : 0;
+            int c2 = srcChannels > 2 ? Short.toUnsignedInt(input[s + 2]) : 0;
+            int c3 = srcChannels > 3 ? Short.toUnsignedInt(input[s + 3]) : 0;
+            int y = ((c0 * 77) + (c1 * 150) + (29 * c2)) >> 8;
+
+            switch ((srcChannels << 3) + dstChannels) {
+                case (1 << 3) + 2:
+                    out[d] = (short) c0; out[d + 1] = (short) 0xFFFF; break;
+                case (1 << 3) + 3:
+                    out[d] = (short) c0; out[d + 1] = (short) c0; out[d + 2] = (short) c0; break;
+                case (1 << 3) + 4:
+                    out[d] = (short) c0; out[d + 1] = (short) c0; out[d + 2] = (short) c0; out[d + 3] = (short) 0xFFFF; break;
+                case (2 << 3) + 1:
+                    out[d] = (short) c0; break;
+                case (2 << 3) + 3:
+                    out[d] = (short) c0; out[d + 1] = (short) c0; out[d + 2] = (short) c0; break;
+                case (2 << 3) + 4:
+                    out[d] = (short) c0; out[d + 1] = (short) c0; out[d + 2] = (short) c0; out[d + 3] = (short) c1; break;
+                case (3 << 3) + 4:
+                    out[d] = (short) c0; out[d + 1] = (short) c1; out[d + 2] = (short) c2; out[d + 3] = (short) 0xFFFF; break;
+                case (3 << 3) + 1:
+                    out[d] = (short) y; break;
+                case (3 << 3) + 2:
+                    out[d] = (short) y; out[d + 1] = (short) 0xFFFF; break;
+                case (4 << 3) + 1:
+                    out[d] = (short) y; break;
+                case (4 << 3) + 2:
+                    out[d] = (short) y; out[d + 1] = (short) c3; break;
+                case (4 << 3) + 3:
+                    out[d] = (short) c0; out[d + 1] = (short) c1; out[d + 2] = (short) c2; break;
+                case (1 << 3) + 1:
+                case (2 << 3) + 2:
+                case (3 << 3) + 3:
+                case (4 << 3) + 4:
+                    System.arraycopy(input, s, out, d, dstChannels);
+                    break;
+                default:
+                    throw new IllegalStateException("bad combo");
+            }
+        }
+        return out;
     }
 }

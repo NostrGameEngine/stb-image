@@ -19,7 +19,8 @@ public class StbImageInfo {
         TGA,
         HDR,
         PSD,
-        PNM
+        PNM,
+        PIC
     }
 
     public StbImageInfo(int width, int height, int channels, boolean is16Bit, ImageFormat format) {

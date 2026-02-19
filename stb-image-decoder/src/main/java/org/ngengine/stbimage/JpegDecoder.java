@@ -22,9 +22,8 @@ import java.util.function.IntFunction;
 public class JpegDecoder implements StbDecoder {
 
     private static final int DCTSIZE = 8;
-    private static final int DCTSIZE2 = 64;
-
     private static final int FAST_BITS = 9;
+    private static final int MARKER_NONE = 0xFF;
 
     private ByteBuffer buffer;
     private int pos;
@@ -40,9 +39,11 @@ public class JpegDecoder implements StbDecoder {
     private boolean progressive;
     private int scanStart, scanEnd;  // spectral selection for progressive
     private int succHigh, succLow;   // successive approximation
+    private int eobRun;
 
     // CMYK detection
     private boolean app14;           // Adobe APP14 marker found (CMYK flag)
+    private int app14ColorTransform = -1; // 0=CMYK, 2=YCCK
 
     private int imgHMax, imgVMax;
     private int mcusPerRow, mcusPerCol;
@@ -54,9 +55,6 @@ public class JpegDecoder implements StbDecoder {
 
     // Huffman tables: 0-3 DC, 4-7 AC
     private final HuffmanTable[] huffmanTables = new HuffmanTable[8];
-
-    // Huffman selector per component: (td << 4) | ta
-    private final int[] compHuffIdx = new int[4];
 
     // Scan order from SOS (component indices)
     private int scanN;
@@ -83,6 +81,8 @@ public class JpegDecoder implements StbDecoder {
         int w2, h2;     // stored buffer size (MCU padded), in pixels
         int[] data;     // w2*h2 pixels in [0..255]
         int[] linebuf;  // scratch buffer for resampling, at least width+3
+        short[] coeff;  // progressive coefficients (64 * coeffW * coeffH)
+        int coeffW, coeffH;
     }
 
     private static final class HuffmanTable {
@@ -144,6 +144,7 @@ public class JpegDecoder implements StbDecoder {
         this.allocator = allocator ;
         this.flipVertically = flipVertically;
         this.pos = 0;
+        this.marker = MARKER_NONE;
         for (int i = 0; i < imgComp.length; i++) imgComp[i] = new Component();
     }
 
@@ -155,6 +156,7 @@ public class JpegDecoder implements StbDecoder {
     public StbImageInfo info() {
         try {
             pos = 0;
+            marker = MARKER_NONE;
             if (read8() != 0xFF || read8() != 0xD8) return null;
 
             while (pos < buffer.limit()) {
@@ -213,6 +215,8 @@ public class JpegDecoder implements StbDecoder {
         // For baseline, decode the single scan now
         if (!progressive) {
             decodeScan();
+        } else {
+            finishProgressive();
         }
 
         // stb load_jpeg_image: decode_n == 1 when source is 3 and requested < 3
@@ -282,7 +286,7 @@ public class JpegDecoder implements StbDecoder {
                         putPixel(output, outRowOff, x, outChannels, r8, g8, b8);
                     }
                 } else if (components == 4 && app14) {
-                    // CMYK (YCCK) - convert to RGB
+                    // Adobe APP14 CMYK/YCCK
                     // Y, Cb, Cr, K stored in components 0, 1, 2, 3
                     Row yrow  = coutput[0];
                     Row cbrow = coutput[1];
@@ -293,8 +297,9 @@ public class JpegDecoder implements StbDecoder {
                         int Cb = cbrow.a[cbrow.off + x];
                         int Cr = crrow.a[crrow.off + x];
                         int K  = krow.a[krow.off + x];
-                        // Convert YCCK to RGB
-                        int rgbPacked = ycckToRgbPacked(Y, Cb, Cr, K);
+                        int rgbPacked = (app14ColorTransform == 0)
+                            ? cmykToRgbPacked(Y, Cb, Cr, K)
+                            : ycckToRgbPacked(Y, Cb, Cr, K);
                         int r8 = (rgbPacked >>> 16) & 0xFF;
                         int g8 = (rgbPacked >>> 8) & 0xFF;
                         int b8 = rgbPacked & 0xFF;
@@ -379,6 +384,7 @@ public class JpegDecoder implements StbDecoder {
         restartInterval = 0;
         width = height = components = 0;
         rgb = 0;
+        marker = MARKER_NONE;
 
         while (pos < buffer.limit()) {
             int m = findMarker();
@@ -421,7 +427,7 @@ public class JpegDecoder implements StbDecoder {
                     }
                     // For progressive, decode this scan and continue
                     decodeScan();
-                    break;
+                    continue;
 
                 case 0xEE: // APP14 (Adobe)
                     // Check for CMYK marker
@@ -451,6 +457,11 @@ public class JpegDecoder implements StbDecoder {
      * - return marker byte
      */
     private int findMarker() {
+        if (marker != MARKER_NONE) {
+            int m = marker;
+            marker = MARKER_NONE;
+            return m;
+        }
         int limit = buffer.limit();
         while (pos < limit) {
             while (pos < limit && (buffer.get(pos) & 0xFF) != 0xFF) pos++;
@@ -561,6 +572,10 @@ public class JpegDecoder implements StbDecoder {
             c.h2 = mcusPerCol * c.v * DCTSIZE;
             c.data = new int[c.w2 * c.h2];
             c.linebuf = new int[width + 3];
+            // Progressive coefficient grid is MCU-padded, like stb's coeff_w/coeff_h.
+            c.coeffW = c.w2 / 8;
+            c.coeffH = c.h2 / 8;
+            c.coeff = progressive ? new short[64 * c.coeffW * c.coeffH] : null;
             c.hd = c.ha = 0;
         }
     }
@@ -581,12 +596,13 @@ public class JpegDecoder implements StbDecoder {
                 }
             }
             if (isAdobe) {
-                // Skip version (2), flags0 (2), flags1 (2) = 4 bytes
-                pos += 4;
+                // Skip version (2), flags0 (2), flags1 (2)
+                pos += 6;
                 int transform = read8();
                 // Transform: 0 = RGB, 1 = YCbCr, 2 = YCCK
                 if (transform == 2 || transform == 0) {
                     app14 = true;
+                    app14ColorTransform = transform;
                 }
             }
         }
@@ -663,7 +679,6 @@ public class JpegDecoder implements StbDecoder {
 
             imgComp[which].hd = hd;
             imgComp[which].ha = ha;
-            compHuffIdx[which] = (hd << 4) | ha;
             scanOrder[i] = which;
         }
 
@@ -678,21 +693,23 @@ public class JpegDecoder implements StbDecoder {
         if (!progressive) {
             if (scanStart != 0) throw new StbFailureException("Bad SOS (specStart)");
             if (succHigh != 0 || succLow != 0) throw new StbFailureException("Bad SOS (succ)");
+            scanEnd = 63;
         } else {
-            // Progressive: validate successive approximation
-            if (succHigh > 13 || succLow > 13) {
-                throw new StbFailureException("Bad SOS (succ)");
+            if (scanStart > scanEnd || scanStart > 63 || scanEnd > 63) {
+                throw new StbFailureException("Bad SOS (spec)");
             }
+            if (succHigh > 13 || succLow > 13) throw new StbFailureException("Bad SOS (succ)");
         }
 
         // reset entropy and predictors
         codeBuffer = 0;
         codeBits = 0;
-        marker = 0;
+        marker = MARKER_NONE;
         nomore = false;
         for (int i = 0; i < 4; i++) dcPred[i] = 0;
 
-        todo = restartInterval;
+        eobRun = 0;
+        todo = restartInterval != 0 ? restartInterval : Integer.MAX_VALUE;
     }
 
     // ---------------------------
@@ -714,236 +731,194 @@ public class JpegDecoder implements StbDecoder {
 
     /**
      * Progressive JPEG decoding.
-     * Handles DC first, DC refine, AC first, and AC refine scans.
+     * Matches stb_image: store coefficients during scans, IDCT later in finishProgressive().
      */
     private void decodeProgressiveScan() {
-        // For progressive, we decode all MCUs
-        // The scanStart/scanEnd defines which coefficients to decode
-        // succHigh/succLow defines progressive refinement
+        resetEntropy();
 
-        boolean isDC = (scanStart == 0 && scanEnd == 0);
-        boolean isFirst = (succLow == 0);
-
-        if (isDC) {
-            // DC scan
-            if (isFirst) {
-                // DC first: decode DC coefficients from scratch
-                if (scanN == 1) {
-                    decodeProgressiveDCFirst(scanOrder[0]);
-                } else {
-                    decodeProgressiveDCFirstInterleaved();
-                }
-            } else {
-                // DC refine: add/refine DC coefficients
-                if (scanN == 1) {
-                    decodeProgressiveDCRefine(scanOrder[0]);
-                } else {
-                    // For interleaved DC refine, decode normally
-                    decodeProgressiveDCFirstInterleaved();
+        if (scanN == 1) {
+            int n = scanOrder[0];
+            Component c = imgComp[n];
+            int blockW = (c.x + 7) >> 3;
+            int blockH = (c.y + 7) >> 3;
+            for (int by = 0; by < blockH; by++) {
+                for (int bx = 0; bx < blockW; bx++) {
+                    int off = 64 * (bx + by * c.coeffW);
+                    if (scanStart == 0) {
+                        if (!decodeBlockProgDc(c.coeff, off, huffmanTables[c.hd], n)) {
+                            throw new StbFailureException("Corrupt JPEG");
+                        }
+                    } else {
+                        if (!decodeBlockProgAc(c.coeff, off, huffmanTables[c.ha + 4])) {
+                            throw new StbFailureException("Corrupt JPEG");
+                        }
+                    }
+                    if (--todo <= 0) {
+                        if (codeBits < 24) growBufferUnsafe();
+                        if (!isRestartMarker(marker)) return;
+                        resetEntropy();
+                    }
                 }
             }
+            return;
+        }
+
+        // Interleaved progressive scans are DC-only.
+        for (int mcuY = 0; mcuY < mcusPerCol; mcuY++) {
+            for (int mcuX = 0; mcuX < mcusPerRow; mcuX++) {
+                for (int si = 0; si < scanN; si++) {
+                    int n = scanOrder[si];
+                    Component c = imgComp[n];
+                    for (int y = 0; y < c.v; y++) {
+                        for (int x = 0; x < c.h; x++) {
+                            int x2 = mcuX * c.h + x;
+                            int y2 = mcuY * c.v + y;
+                            int off = 64 * (x2 + y2 * c.coeffW);
+                            if (!decodeBlockProgDc(c.coeff, off, huffmanTables[c.hd], n)) {
+                                throw new StbFailureException("Corrupt JPEG");
+                            }
+                        }
+                    }
+                }
+                if (--todo <= 0) {
+                    if (codeBits < 24) growBufferUnsafe();
+                    if (!isRestartMarker(marker)) return;
+                    resetEntropy();
+                }
+            }
+        }
+    }
+
+    private void resetEntropy() {
+        codeBits = 0;
+        codeBuffer = 0;
+        nomore = false;
+        marker = MARKER_NONE;
+        for (int i = 0; i < 4; i++) dcPred[i] = 0;
+        todo = restartInterval != 0 ? restartInterval : Integer.MAX_VALUE;
+        eobRun = 0;
+    }
+
+    private boolean isRestartMarker(int m) {
+        return m >= 0xD0 && m <= 0xD7;
+    }
+
+    private boolean decodeBlockProgDc(short[] data, int off, HuffmanTable hdc, int compIdx) {
+        if (scanEnd != 0) return false;
+        if (codeBits < 16) growBufferUnsafe();
+
+        if (succHigh == 0) {
+            for (int i = 0; i < 64; i++) data[off + i] = 0;
+            int t = jpegHuffDecodeTable(hdc);
+            if (t < 0 || t > 15) return false;
+            int diff = t != 0 ? extendReceive(t) : 0;
+            dcPred[compIdx] += diff;
+            data[off] = (short) (dcPred[compIdx] * (1 << succLow));
         } else {
-            // AC scan
-            if (isFirst) {
-                // AC first: decode AC coefficients from scratch
-                if (scanN == 1) {
-                    decodeProgressiveACFirst(scanOrder[0]);
+            if (jpegGetBit() != 0) data[off] += (short) (1 << succLow);
+        }
+        return true;
+    }
+
+    private boolean decodeBlockProgAc(short[] data, int off, HuffmanTable hac) {
+        if (scanStart == 0) return false;
+
+        if (succHigh == 0) {
+            int shift = succLow;
+            if (eobRun != 0) {
+                --eobRun;
+                return true;
+            }
+
+            int k = scanStart;
+            while (k <= scanEnd) {
+                int rs = jpegHuffDecodeTable(hac);
+                if (rs < 0) return false;
+                int s = rs & 15;
+                int r = rs >> 4;
+                if (s == 0) {
+                    if (r < 15) {
+                        eobRun = 1 << r;
+                        if (r != 0) eobRun += jpegGetBits(r);
+                        --eobRun;
+                        break;
+                    }
+                    k += 16;
                 } else {
-                    decodeProgressiveACFirstInterleaved();
+                    k += r;
+                    if (k > scanEnd) break;
+                    int zig = dezigzag[k++];
+                    data[off + zig] = (short) (extendReceive(s) * (1 << shift));
+                }
+            }
+            return true;
+        }
+
+        short bit = (short) (1 << succLow);
+        if (eobRun != 0) {
+            --eobRun;
+            for (int k = scanStart; k <= scanEnd; ++k) {
+                int zig = dezigzag[k];
+                short p = data[off + zig];
+                if (p != 0 && jpegGetBit() != 0 && (p & bit) == 0) {
+                    data[off + zig] = (short) (p > 0 ? p + bit : p - bit);
+                }
+            }
+            return true;
+        }
+
+        int k = scanStart;
+        while (k <= scanEnd) {
+            int rs = jpegHuffDecodeTable(hac);
+            if (rs < 0) return false;
+            int s = rs & 15;
+            int r = rs >> 4;
+            if (s == 0) {
+                if (r < 15) {
+                    eobRun = (1 << r) - 1;
+                    if (r != 0) eobRun += jpegGetBits(r);
+                    r = 64;
                 }
             } else {
-                // AC refine: add/refine AC coefficients
-                if (scanN == 1) {
-                    decodeProgressiveACRefine(scanOrder[0]);
+                if (s != 1) return false;
+                s = jpegGetBit() != 0 ? bit : -bit;
+            }
+
+            while (k <= scanEnd) {
+                int zig = dezigzag[k++];
+                short p = data[off + zig];
+                if (p != 0) {
+                    if (jpegGetBit() != 0 && (p & bit) == 0) {
+                        data[off + zig] = (short) (p > 0 ? p + bit : p - bit);
+                    }
                 } else {
-                    // For interleaved AC refine
-                    decodeProgressiveACFirstInterleaved();
+                    if (r == 0) {
+                        data[off + zig] = (short) s;
+                        break;
+                    }
+                    --r;
                 }
             }
         }
+        return true;
     }
 
-    private void decodeProgressiveDCFirst(int compIdx) {
-        Component c = imgComp[compIdx];
-        int wBlocks = (c.x + 7) >> 3;
-        int hBlocks = (c.y + 7) >> 3;
-
-        for (int j = 0; j < hBlocks; j++) {
-            for (int i = 0; i < wBlocks; i++) {
-                // Decode DC coefficient
-                int dc = decodeDCFirst(compIdx);
-
-                // Store to component data at block position
-                // For progressive, we store as int values (not applying IDCT yet)
-                int blockOff = (j * 8 * c.w2) + (i * 8);
-                c.data[blockOff] = dc;
-
-                if (restartInterval != 0) {
-                    if (--todo == 0) {
-                        processRestart();
-                        todo = restartInterval;
+    private void finishProgressive() {
+        int[] block = new int[64];
+        for (int n = 0; n < components; n++) {
+            Component c = imgComp[n];
+            if (c.coeff == null) continue;
+            int[] deq = dequant[c.tq];
+            int blockW = (c.x + 7) >> 3;
+            int blockH = (c.y + 7) >> 3;
+            for (int by = 0; by < blockH; by++) {
+                for (int bx = 0; bx < blockW; bx++) {
+                    int off = 64 * (bx + by * c.coeffW);
+                    for (int i = 0; i < 64; i++) {
+                        block[i] = c.coeff[off + i] * deq[i];
                     }
-                }
-            }
-        }
-    }
-
-    private void decodeProgressiveDCFirstInterleaved() {
-        // Interleaved DC decoding for progressive
-        int[] coeff = new int[64];
-
-        for (int mcuY = 0; mcuY < mcusPerCol; mcuY++) {
-            for (int mcuX = 0; mcuX < mcusPerRow; mcuX++) {
-                for (int si = 0; si < scanN; si++) {
-                    int compIdx = scanOrder[si];
-                    Component c = imgComp[compIdx];
-
-                    for (int by = 0; by < c.v; by++) {
-                        for (int bx = 0; bx < c.h; bx++) {
-                            int dc = decodeDCFirst(compIdx);
-
-                            int x2 = (mcuX * c.h + bx) * 8;
-                            int y2 = (mcuY * c.v + by) * 8;
-                            int blockOff = y2 * c.w2 + x2;
-                            c.data[blockOff] = dc;
-                        }
-                    }
-                }
-
-                if (restartInterval != 0) {
-                    if (--todo == 0) {
-                        processRestart();
-                        todo = restartInterval;
-                    }
-                }
-            }
-        }
-    }
-
-    private void decodeProgressiveDCRefine(int compIdx) {
-        Component c = imgComp[compIdx];
-        int wBlocks = (c.x + 7) >> 3;
-        int hBlocks = (c.y + 7) >> 3;
-
-        for (int j = 0; j < hBlocks; j++) {
-            for (int i = 0; i < wBlocks; i++) {
-                // Decode DC refine bit and add to existing
-                int bit = decodeBit();
-                int blockOff = (j * 8 * c.w2) + (i * 8);
-                if (bit != 0) {
-                    c.data[blockOff] |= (1 << succHigh);
-                }
-
-                if (restartInterval != 0) {
-                    if (--todo == 0) {
-                        processRestart();
-                        todo = restartInterval;
-                    }
-                }
-            }
-        }
-    }
-
-    private void decodeProgressiveACFirst(int compIdx) {
-        Component c = imgComp[compIdx];
-        int wBlocks = (c.x + 7) >> 3;
-        int hBlocks = (c.y + 7) >> 3;
-
-        int[] coeff = new int[64];
-
-        for (int j = 0; j < hBlocks; j++) {
-            for (int i = 0; i < wBlocks; i++) {
-                // Get existing DC value from component
-                int blockOff = (j * 8 * c.w2) + (i * 8);
-                coeff[0] = c.data[blockOff];
-
-                // Decode AC coefficients for this block
-                decodeACFirst(coeff, compIdx, scanStart, scanEnd);
-
-                // Apply IDCT and store
-                int[] idct = applyIdct(coeff);
-                storeBlock(c, i * 8, j * 8, idct);
-
-                if (restartInterval != 0) {
-                    if (--todo == 0) {
-                        processRestart();
-                        todo = restartInterval;
-                    }
-                }
-            }
-        }
-    }
-
-    private void decodeProgressiveACFirstInterleaved() {
-        int[] coeff = new int[64];
-
-        for (int mcuY = 0; mcuY < mcusPerCol; mcuY++) {
-            for (int mcuX = 0; mcuX < mcusPerRow; mcuX++) {
-                for (int si = 0; si < scanN; si++) {
-                    int compIdx = scanOrder[si];
-                    Component c = imgComp[compIdx];
-
-                    for (int by = 0; by < c.v; by++) {
-                        for (int bx = 0; bx < c.h; bx++) {
-                            int x2 = (mcuX * c.h + bx) * 8;
-                            int y2 = (mcuY * c.v + by) * 8;
-
-                            // Get DC from component
-                            int blockOff = y2 * c.w2 + x2;
-                            coeff[0] = c.data[blockOff];
-
-                            // Decode AC
-                            decodeACFirst(coeff, compIdx, scanStart, scanEnd);
-
-                            // Apply IDCT and store
-                            int[] idct = applyIdct(coeff);
-                            storeBlock(c, x2, y2, idct);
-                        }
-                    }
-                }
-
-                if (restartInterval != 0) {
-                    if (--todo == 0) {
-                        processRestart();
-                        todo = restartInterval;
-                    }
-                }
-            }
-        }
-    }
-
-    private void decodeProgressiveACRefine(int compIdx) {
-        // AC refine is complex - we skip it for now
-        // Most progressive JPEGs use AC first, not refine
-        // Fall back to baseline-style decode for this scan
-        Component c = imgComp[compIdx];
-        int wBlocks = (c.x + 7) >> 3;
-        int hBlocks = (c.y + 7) >> 3;
-
-        int[] coeff = new int[64];
-
-        for (int j = 0; j < hBlocks; j++) {
-            for (int i = 0; i < wBlocks; i++) {
-                // Load existing coefficients
-                int blockOff = (j * 8 * c.w2) + (i * 8);
-                coeff[0] = c.data[blockOff];
-                // Load other coefficients from data (they're in the component data)
-                for (int k = 1; k < 64; k++) {
-                    coeff[k] = 0; // Simplified - actual implementation would load
-                }
-
-                // Decode refine AC
-                decodeACRefine(coeff, compIdx, scanStart, scanEnd);
-
-                // Apply IDCT and store
-                int[] idct = applyIdct(coeff);
-                storeBlock(c, i * 8, j * 8, idct);
-
-                if (restartInterval != 0) {
-                    if (--todo == 0) {
-                        processRestart();
-                        todo = restartInterval;
-                    }
+                    int[] idct = applyIdct(block);
+                    storeBlock(c, bx * 8, by * 8, idct);
                 }
             }
         }
@@ -1186,9 +1161,9 @@ public class JpegDecoder implements StbDecoder {
         }
 
         int m = marker;
-        marker = 0;
+        marker = MARKER_NONE;
 
-        if (m == 0) {
+        if (m == MARKER_NONE) {
             // scan raw stream for 0xFF then marker
             int c;
             do {
@@ -1205,6 +1180,11 @@ public class JpegDecoder implements StbDecoder {
         }
 
         if (m < 0xD0 || m > 0xD7) {
+            if (m == 0xD9) {
+                // Some streams terminate without the expected final restart marker.
+                nomore = true;
+                return;
+            }
             throw new StbFailureException("Bad restart marker: 0x" + Integer.toHexString(m));
         }
 
@@ -1213,137 +1193,53 @@ public class JpegDecoder implements StbDecoder {
         codeBuffer = 0;
         codeBits = 0;
         nomore = false;
+        eobRun = 0;
     }
 
-    // ---------------------------
-    // Progressive decode helpers
-    // ---------------------------
+    private int jpegHuffDecodeTable(HuffmanTable h) {
+        if (h == null) return -1;
+        if (codeBits < 16) growBufferUnsafe();
 
-    /**
-     * Decode DC coefficient for progressive JPEG (first scan)
-     */
-    private int decodeDCFirst(int compIdx) {
-        Component c = imgComp[compIdx];
-        int dcTable = c.hd;
+        int c = (codeBuffer >>> (32 - FAST_BITS)) & ((1 << FAST_BITS) - 1);
+        int k = h.fast[c] & 0xFF;
+        if (k < 255) {
+            int s = h.size[k] & 0xFF;
+            if (s > codeBits) return -1;
+            codeBuffer <<= s;
+            codeBits -= s;
+            return h.values[k] & 0xFF;
+        }
 
-        int t = jpegHuffDecode(dcTable);
-        if (t < 0) throw new StbFailureException("Bad Huffman (DC)");
+        int temp = codeBuffer >>> 16;
+        int s;
+        for (s = FAST_BITS + 1; s <= 16; s++) {
+            if (((long) temp) < h.maxcode[s]) break;
+        }
+        if (s == 17 || s > codeBits) return -1;
 
-        int diff = (t != 0) ? extendReceive(t) : 0;
-        dcPred[compIdx] += diff;
-
-        return dcPred[compIdx];
+        int symIndex = ((codeBuffer >>> (32 - s)) & bmask[s]) + h.delta[s];
+        if (symIndex < 0 || symIndex >= 256) return -1;
+        codeBuffer <<= s;
+        codeBits -= s;
+        return h.values[symIndex] & 0xFF;
     }
 
-    /**
-     * Decode a single bit for progressive refinement
-     */
-    private int decodeBit() {
-        // Get bits from code buffer - need at least 1 bit
-        if (codeBits < 1) {
-            growBufferUnsafe();
-            if (nomore) return 0; // Return 0 on end of data
-        }
-
-        int bit = (codeBuffer >>> (codeBits - 1)) & 1;
-        codeBits--;
-        return bit;
+    private int jpegGetBits(int n) {
+        if (codeBits < n) growBufferUnsafe();
+        if (codeBits < n) return 0;
+        int k = (codeBuffer >>> (32 - n)) & bmask[n];
+        codeBuffer <<= n;
+        codeBits -= n;
+        return k;
     }
 
-    /**
-     * Decode AC coefficients for progressive JPEG (first scan)
-     */
-    private void decodeACFirst(int[] data64, int compIdx, int start, int end) {
-        Component c = imgComp[compIdx];
-        int acTable = c.ha + 4;
-        int qt = c.tq;
-
-        if (huffmanTables[acTable] == null) {
-            throw new StbFailureException("Missing AC Huffman table");
-        }
-
-        int k = start;
-        while (k <= end) {
-            int rs = jpegHuffDecode(acTable);
-            if (rs < 0) throw new StbFailureException("Bad Huffman (AC)");
-
-            int s = rs & 15;
-            int r = rs >> 4;
-
-            if (s == 0) {
-                if (r == 15) {
-                    k += 16;
-                    continue;
-                }
-                break; // EOB
-            }
-
-            k += r;
-            if (k > end) break;
-
-            int zz = dezigzag[k];
-            int v = extendReceive(s);
-            data64[zz] = v * dequant[qt][zz];
-            k++;
-        }
-    }
-
-    /**
-     * Decode AC coefficients for progressive JPEG (refine scan)
-     */
-    private void decodeACRefine(int[] data64, int compIdx, int start, int end) {
-        Component c = imgComp[compIdx];
-        int acTable = c.ha + 4;
-        int qt = c.tq;
-
-        if (huffmanTables[acTable] == null) {
-            throw new StbFailureException("Missing AC Huffman table");
-        }
-
-        int k = start;
-        int eob = 0;
-        while (k <= end) {
-            int rs = jpegHuffDecode(acTable);
-            if (rs < 0) throw new StbFailureException("Bad Huffman (AC)");
-
-            int s = rs & 15;
-            int r = rs >> 4;
-
-            if (s == 0) {
-                if (r == 15) {
-                    k += 16;
-                    continue;
-                }
-                // EOB
-                eob = r;
-                break;
-            }
-
-            if (s != 0) {
-                // Non-zero AC value
-                int bit = (succHigh != 0) ? decodeBit() : 1;
-                if (bit < 0) bit = 1;
-
-                int v = extendReceive(s);
-                int zz = dezigzag[k];
-
-                if (bit == 1) {
-                    // Add the value
-                    int sign = (v < 0) ? -1 : 1;
-                    data64[zz] = (sign * ((Math.abs(v) << succHigh) + (1 << succHigh) - 1)) * dequant[qt][zz];
-                } else {
-                    // Keep existing value (should have been set in earlier scan)
-                }
-            }
-            k++;
-        }
-
-        // Handle any remaining EOB
-        if (eob > 0) {
-            for (int i = 0; i < eob; i++) {
-                // Skip to next coefficient
-            }
-        }
+    private int jpegGetBit() {
+        if (codeBits < 1) growBufferUnsafe();
+        if (codeBits < 1) return 0;
+        int k = codeBuffer;
+        codeBuffer <<= 1;
+        --codeBits;
+        return k & 0x80000000;
     }
 
     // ---------------------------
@@ -1364,7 +1260,10 @@ public class JpegDecoder implements StbDecoder {
         for (int i = 0; i < 64; i++) data64[i] = 0;
 
         int t = jpegHuffDecode(dcTable);
-        if (t < 0) throw new StbFailureException("Bad Huffman (DC)");
+        if (t < 0) {
+            if (nomore) return;
+            throw new StbFailureException("Bad Huffman (DC)");
+        }
 
         int diff = (t != 0) ? extendReceive(t) : 0;
         dcPred[compIdx] += diff;
@@ -1375,7 +1274,10 @@ public class JpegDecoder implements StbDecoder {
         int k = 1;
         while (k < 64) {
             int rs = jpegHuffDecode(acTable);
-            if (rs < 0) throw new StbFailureException("Bad Huffman (AC)");
+            if (rs < 0) {
+                if (nomore) break;
+                throw new StbFailureException("Bad Huffman (AC)");
+            }
 
             int s = rs & 15;
             int r = rs >> 4;
@@ -1521,34 +1423,27 @@ public class JpegDecoder implements StbDecoder {
         return (r << 16) | (g << 8) | b;
     }
 
-    /**
-     * Convert YCCK (CMYK via JPEG) to RGB.
-     * CMYK is inverted: 0 = full ink, 255 = white.
-     * We convert: Y -> K, Cb -> C, Cr -> M, K -> Y, then invert.
-     */
+    private int blinn8x8(int x, int y) {
+        int t = x * y + 128;
+        return (t + (t >> 8)) >> 8;
+    }
+
+    private int cmykToRgbPacked(int c, int m, int y, int k) {
+        int r = blinn8x8(c, k);
+        int g = blinn8x8(m, k);
+        int b = blinn8x8(y, k);
+        return (clamp(r) << 16) | (clamp(g) << 8) | clamp(b);
+    }
+
     private int ycckToRgbPacked(int y, int cb, int cr, int k) {
-        // Convert YCbCr to RGB first
-        int yFixed = (y << 20) + (1 << 19);
-        int crv = cr - 128;
-        int cbv = cb - 128;
-
-        int r = (yFixed + crv * FIX_1_40200) >> 20;
-        int g = (yFixed + crv * -FIX_0_71414 + ((cbv * -FIX_0_34414) & 0xffff0000)) >> 20;
-        int b = (yFixed + cbv * FIX_1_77200) >> 20;
-
-        // Apply K (black) - CMYK is inverted
-        // K = 255 means no ink (white), K = 0 means full black
-        // Formula: C' = C * (255-K)/255
-        int kk = 255 - k;
-        r = (r * kk) / 255;
-        g = (g * kk) / 255;
-        b = (b * kk) / 255;
-
-        r = clamp(r);
-        g = clamp(g);
-        b = clamp(b);
-
-        return (r << 16) | (g << 8) | b;
+        int rgb = ycbcrToRgbPacked(y, cb, cr);
+        int r = (rgb >>> 16) & 0xFF;
+        int g = (rgb >>> 8) & 0xFF;
+        int b = rgb & 0xFF;
+        r = blinn8x8(255 - r, k);
+        g = blinn8x8(255 - g, k);
+        b = blinn8x8(255 - b, k);
+        return (clamp(r) << 16) | (clamp(g) << 8) | clamp(b);
     }
 
     // ---------------------------

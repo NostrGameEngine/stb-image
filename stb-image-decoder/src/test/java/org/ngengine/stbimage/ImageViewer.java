@@ -32,6 +32,8 @@ public class ImageViewer extends JFrame {
     private JLabel formatLabel;
     private JLabel sizeLabel;
     private StbImage stbImage;
+    private Timer animationTimer;
+    private GifDecoder animatedGifDecoder;
 
     public ImageViewer() {
         super("STB Image Viewer");
@@ -102,7 +104,7 @@ public class ImageViewer extends JFrame {
 
         // Add file filter for supported images
         chooser.addChoosableFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
-            "Supported Images", "jpg", "jpeg", "png", "bmp", "tga", "gif", "ppm", "pgm", "pbm", "pn", "psd"));
+            "Supported Images", "jpg", "jpeg", "png", "bmp", "tga", "gif", "ppm", "pgm", "pbm", "pn", "psd", "hdr"));
 
         int result = chooser.showOpenDialog(this);
         if (result == JFileChooser.APPROVE_OPTION) {
@@ -112,6 +114,7 @@ public class ImageViewer extends JFrame {
 
     private void loadImage(Path path) {
         try {
+            stopAnimation();
             statusLabel.setText("Loading...");
             formatLabel.setText("Format: -");
             sizeLabel.setText("Size: -");
@@ -120,7 +123,8 @@ public class ImageViewer extends JFrame {
             ByteBuffer buffer = ByteBuffer.wrap(data);
 
             // Get info first
-            StbImageInfo info = stbImage.getDecoder(buffer, false).info();
+            StbDecoder infoDecoder = stbImage.getDecoder(buffer, false);
+            StbImageInfo info = infoDecoder.info();
             if (info == null) {
                 showError("Failed to load image: unknown format");
                 return;
@@ -130,20 +134,24 @@ public class ImageViewer extends JFrame {
             sizeLabel.setText("Size: " + info.getWidth() + " x " + info.getHeight());
 
             // Load full image with 4 channels (RGBA)
-            buffer.rewind();
-            StbImageResult result = stbImage.getDecoder(buffer, false).load(4);
+            StbDecoder decoder = stbImage.getDecoder(ByteBuffer.wrap(data), false);
+            StbImageResult result = decoder.load(4);
 
             // Convert to BufferedImage
             BufferedImage img = createBufferedImage(result);
-
-            // Display
-            ImageIcon icon = new ImageIcon(img);
-            imageLabel.setIcon(icon);
-            imageLabel.setText("");
+            showImage(img);
 
             statusLabel.setText("Loaded: " + path.getFileName() + " (" +
                 result.getWidth() + "x" + result.getHeight() + ", " +
                 result.getChannels() + " channels)");
+
+            if (decoder instanceof GifDecoder) {
+                GifDecoder gifDecoder = (GifDecoder) decoder;
+                if (gifDecoder.isAnimated()) {
+                    animatedGifDecoder = gifDecoder;
+                    startGifAnimation(path.getFileName().toString());
+                }
+            }
 
         } catch (Exception e) {
             showError("Error loading image: " + e.getMessage());
@@ -151,7 +159,54 @@ public class ImageViewer extends JFrame {
         }
     }
 
+    private void showImage(BufferedImage img) {
+        imageLabel.setIcon(new ImageIcon(img));
+        imageLabel.setText("");
+    }
+
+    private void stopAnimation() {
+        animatedGifDecoder = null;
+        if (animationTimer != null) {
+            animationTimer.stop();
+            animationTimer = null;
+        }
+    }
+
+    private void startGifAnimation(String fileName) {
+        if (animatedGifDecoder == null || animatedGifDecoder.getFrameCount() <= 1) {
+            return;
+        }
+        int initialDelay = animatedGifDecoder.getLastFrameDelayMs();
+        if (initialDelay <= 0) initialDelay = 100;
+
+        animationTimer = new Timer(Math.max(20, initialDelay), e -> {
+            try {
+                if (animatedGifDecoder == null) {
+                    stopAnimation();
+                    return;
+                }
+                StbImageResult frame = animatedGifDecoder.loadNextFrame(4);
+                showImage(createBufferedImage(frame));
+                int d = animatedGifDecoder.getLastFrameDelayMs();
+                if (d <= 0) d = 100;
+                animationTimer.setDelay(Math.max(20, d));
+                statusLabel.setText("Playing: " + fileName + " (" + animatedGifDecoder.getFrameCount() + " frames)");
+            } catch (Exception ex) {
+                stopAnimation();
+                showError("Error animating GIF: " + ex.getMessage());
+            }
+        });
+        animationTimer.start();
+    }
+
     private BufferedImage createBufferedImage(StbImageResult result) {
+        if (result.isHdr()) {
+            return createBufferedImageHdr(result);
+        }
+        if (result.is16Bit()) {
+            return createBufferedImage16(result);
+        }
+
         int width = result.getWidth();
         int height = result.getHeight();
         int channels = result.getChannels();
@@ -191,6 +246,120 @@ public class ImageViewer extends JFrame {
 
         img.setRGB(0, 0, width, height, pixels, 0, width);
         return img;
+    }
+
+    private BufferedImage createBufferedImage16(StbImageResult result) {
+        int width = result.getWidth();
+        int height = result.getHeight();
+        int channels = result.getChannels();
+
+        BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        ByteBuffer data = result.getData();
+        data.rewind();
+
+        int[] pixels = new int[width * height];
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int offset = (y * width + x) * channels * 2;
+                int r, g, b, a;
+                if (channels == 1) {
+                    r = g = b = to8bitFrom16(data.getShort(offset));
+                    a = 255;
+                } else if (channels == 2) {
+                    r = g = b = to8bitFrom16(data.getShort(offset));
+                    a = to8bitFrom16(data.getShort(offset + 2));
+                } else if (channels == 3) {
+                    r = to8bitFrom16(data.getShort(offset));
+                    g = to8bitFrom16(data.getShort(offset + 2));
+                    b = to8bitFrom16(data.getShort(offset + 4));
+                    a = 255;
+                } else {
+                    r = to8bitFrom16(data.getShort(offset));
+                    g = to8bitFrom16(data.getShort(offset + 2));
+                    b = to8bitFrom16(data.getShort(offset + 4));
+                    a = to8bitFrom16(data.getShort(offset + 6));
+                }
+                pixels[y * width + x] = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+
+        img.setRGB(0, 0, width, height, pixels, 0, width);
+        return img;
+    }
+
+    private BufferedImage createBufferedImageHdr(StbImageResult result) {
+        int width = result.getWidth();
+        int height = result.getHeight();
+        int channels = result.getChannels();
+
+        BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        ByteBuffer data = result.getData();
+        data.rewind();
+
+        int pixelCount = width * height;
+        float[] linear = new float[pixelCount * 4];
+        float maxLuma = 0.0f;
+
+        for (int i = 0; i < pixelCount; i++) {
+            int off = i * channels * 4;
+            float r, g, b, a;
+            if (channels == 1) {
+                r = g = b = data.getFloat(off);
+                a = 1.0f;
+            } else if (channels == 2) {
+                r = g = b = data.getFloat(off);
+                a = data.getFloat(off + 4);
+            } else if (channels == 3) {
+                r = data.getFloat(off);
+                g = data.getFloat(off + 4);
+                b = data.getFloat(off + 8);
+                a = 1.0f;
+            } else {
+                r = data.getFloat(off);
+                g = data.getFloat(off + 4);
+                b = data.getFloat(off + 8);
+                a = data.getFloat(off + 12);
+            }
+
+            int lo = i * 4;
+            linear[lo] = r;
+            linear[lo + 1] = g;
+            linear[lo + 2] = b;
+            linear[lo + 3] = a;
+            float luma = 0.2126f * Math.max(r, 0.0f) + 0.7152f * Math.max(g, 0.0f) + 0.0722f * Math.max(b, 0.0f);
+            maxLuma = Math.max(maxLuma, luma);
+        }
+
+        float exposure = maxLuma > 0.0f ? 0.8f / maxLuma : 1.0f;
+        int[] pixels = new int[pixelCount];
+        for (int i = 0; i < pixelCount; i++) {
+            int lo = i * 4;
+            int r = to8bitHdr(linear[lo], exposure);
+            int g = to8bitHdr(linear[lo + 1], exposure);
+            int b = to8bitHdr(linear[lo + 2], exposure);
+            int a = to8bitAlpha(linear[lo + 3]);
+            pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
+        }
+
+        img.setRGB(0, 0, width, height, pixels, 0, width);
+        return img;
+    }
+
+    private int to8bitFrom16(short value) {
+        return (Short.toUnsignedInt(value) * 255 + 32767) / 65535;
+    }
+
+    private int to8bitHdr(float linear, float exposure) {
+        float x = Math.max(0.0f, linear * exposure);
+        float mapped = x / (1.0f + x); // Reinhard tone map
+        float gamma = (float) Math.pow(mapped, 1.0 / 2.2);
+        int out = Math.round(gamma * 255.0f);
+        return Math.max(0, Math.min(255, out));
+    }
+
+    private int to8bitAlpha(float alpha) {
+        int out = Math.round(Math.max(0.0f, Math.min(1.0f, alpha)) * 255.0f);
+        return Math.max(0, Math.min(255, out));
     }
 
     private void enableDragAndDrop() {

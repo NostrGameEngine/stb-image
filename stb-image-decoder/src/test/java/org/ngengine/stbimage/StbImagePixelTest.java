@@ -76,7 +76,13 @@ public class StbImagePixelTest {
         ref.order(java.nio.ByteOrder.LITTLE_ENDIAN);
         int width = ref.getInt();
         int height = ref.getInt();
-        int channels = ref.getInt();
+        int channelsInFile = ref.getInt();
+        int pixelCount = width * height;
+        int bytesLeft = ref.remaining();
+        int channels = (pixelCount > 0) ? (bytesLeft / pixelCount) : channelsInFile;
+        if (channels <= 0 || channels > 4 || channels * pixelCount != bytesLeft) {
+            channels = channelsInFile;
+        }
         int[] result = new int[3 + width * height * channels];
         result[0] = width;
         result[1] = height;
@@ -88,11 +94,32 @@ public class StbImagePixelTest {
         return result;
     }
 
-    private void assertPixelsMatch(ByteBuffer decoded, int[] expected, int width, int height, int channels) {
+    private void assertPixelsMatch(ByteBuffer decoded, int[] expected, int width, int height, int channels, boolean isHdr) {
         decoded.rewind();
 
-        byte[] decodedPixels = new byte[width * height * channels];
-        decoded.get(decodedPixels);
+        byte[] decodedPixels;
+        // Use tolerance for HDR - higher than standard due to float->byte conversion
+        // and potential differences in reference generation
+        int tolerance =  PIXEL_TOLERANCE;
+
+        if (isHdr) {
+            // For HDR, convert floats to bytes (0-255) for comparison
+            // Uses gamma 2.2 like stb_image.h's hdr_to_ldr conversion
+            decodedPixels = new byte[width * height * channels];
+            double gammaInv = 1.0 / 2.2;
+            for (int i = 0; i < width * height * channels; i++) {
+                float f = decoded.getFloat(i * 4);
+                // Convert float to byte: z = pow(data, 1/2.2) * 255 + 0.5f
+                double z = Math.pow(f, gammaInv) * 255.0 + 0.5;
+                int byteVal = (int) z;
+                if (byteVal < 0) byteVal = 0;
+                if (byteVal > 255) byteVal = 255;
+                decodedPixels[i] = (byte) byteVal;
+            }
+        } else {
+            decodedPixels = new byte[width * height * channels];
+            decoded.get(decodedPixels);
+        }
 
         int offset = 3; // skip width, height, channels
         int maxDiff = 0;
@@ -106,7 +133,7 @@ public class StbImagePixelTest {
                 maxDiff = diff;
                 maxDiffIdx = i;
             }
-            if (diff > PIXEL_TOLERANCE) {
+            if (diff > tolerance) {
                 failCount++;
             }
         }
@@ -115,10 +142,10 @@ public class StbImagePixelTest {
             int expectedVal = expected[offset + i];
             int decodedVal = Byte.toUnsignedInt(decodedPixels[i]);
             int diff = Math.abs(expectedVal - decodedVal);
-            if (diff > PIXEL_TOLERANCE) {
-                assertTrue(diff <= PIXEL_TOLERANCE,
+            if (diff > tolerance) {
+                assertTrue(diff <= tolerance,
                     String.format("Pixel %d mismatch: decoded=%d, expected=%d, diff=%d, tolerance=%d",
-                        i, decodedVal, expectedVal, diff, PIXEL_TOLERANCE));
+                        i, decodedVal, expectedVal, diff, tolerance));
             }
         }
     }
@@ -134,13 +161,33 @@ public class StbImagePixelTest {
         return fileExt.equals(extFilter);
     }
 
+    private int testLimit(String envName, int fallback) {
+        String v = System.getenv(envName);
+        if (v == null || v.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(v.trim());
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private boolean envFlag(String envName, boolean fallback) {
+        String v = System.getenv(envName);
+        if (v == null || v.isBlank()) {
+            return fallback;
+        }
+        v = v.trim().toLowerCase();
+        return v.equals("1") || v.equals("true") || v.equals("yes") || v.equals("on");
+    }
+
     /**
      * Test loading and decoding each image in the index
      */
     @Test
     void testAllImagesLoad() throws IOException {
-        // Test a subset of images (full set can be tested with more memory/time)
-        int limit = 200;
+        int limit = testLimit("TEST_LOAD_LIMIT", 200);
 
         int loaded = 0;
         int failed = 0;
@@ -153,6 +200,7 @@ public class StbImagePixelTest {
             String filename = imagePath.substring(imagePath.lastIndexOf('/') + 1);
 
             if (!matchesExtensionFilter(filename)) continue;
+            if (filename.endsWith(".md")) continue;
 
             // Skip invalid/truncated test files
             if (filename.contains("truncated") || filename.equals("random.bin")) {
@@ -198,8 +246,8 @@ public class StbImagePixelTest {
      */
     @Test
     void testAllImagesAgainstReference() throws IOException {
-        // Test a subset of images (full set can be tested with more memory/time)
-        int limit = 150;
+        int limit = testLimit("TEST_REF_LIMIT", Integer.MAX_VALUE);
+        boolean skipKnownProblematic = envFlag("TEST_REF_SKIP_KNOWN", true);
 
         int passed = 0;
         int failed = 0;
@@ -209,21 +257,23 @@ public class StbImagePixelTest {
         for (String imagePath : imagePaths) {
             if (count++ >= limit) break;
             String filename = imagePath.substring(imagePath.lastIndexOf('/') + 1);
-            String basename = filename.substring(0, filename.lastIndexOf('.'));
             String refFilename = filename + ".bin";
 
             if (!matchesExtensionFilter(filename)) continue;
+            if (filename.endsWith(".md")) continue;
 
             // Skip files without reference data or known problematic ones
             if (filename.contains("truncated") || filename.equals("random.bin")) {
                 continue;
             }
-            // Skip known problematic images
-            if (filename.contains("height") || filename.contains("_height") || filename.contains("specular") ||
-                filename.endsWith(".gif") || filename.contains("cmyk") ||
-                filename.contains("diffuse") || filename.contains("Diffuse") || filename.contains("diffus") ||
-                filename.equals("Dependency-Graph.png")) {
-                continue;
+            if (skipKnownProblematic) {
+                // Temporary allowlist for known mismatch groups while decoder parity work is in progress
+                if (filename.contains("height") || filename.contains("_height") || filename.contains("specular") ||
+                    filename.endsWith(".gif") || filename.contains("cmyk") ||
+                    filename.contains("diffuse") || filename.contains("Diffuse") || filename.contains("diffus") ||
+                    filename.equals("Dependency-Graph.png")) {
+                    continue;
+                }
             }
 
             // Convert project-relative path to classpath-relative path
@@ -237,9 +287,9 @@ public class StbImagePixelTest {
                 int[] ref = loadReference(refFilename);
                 int expectedChannels = ref[2];
 
-                // Load image - always request 4 channels to match reference generation
+                // Request the same output channel count used by the reference generator.
                 ByteBuffer image = loadResource(classpathPath);
-                StbImageResult result = stbImage.getDecoder(image, false).load(4);
+                StbImageResult result = stbImage.getDecoder(image, false).load(expectedChannels);
 
                 assertNotNull(result, "Failed to load: " + filename);
 
@@ -248,12 +298,9 @@ public class StbImagePixelTest {
                 assertEquals(ref[1], result.getHeight(), "Height mismatch: " + filename);
 
 
-                // Compare channels - we may get different channel counts
                 int resultChannels = result.getChannels();
-
-                // Compare pixels - use the minimum of ref and result channels
-                int compareChannels = Math.min(expectedChannels, resultChannels);
-                assertPixelsMatch(result.getData(), ref, ref[0], ref[1], compareChannels);
+                assertEquals(expectedChannels, resultChannels, "Channel mismatch: " + filename);
+                assertPixelsMatch(result.getData(), ref, ref[0], ref[1], expectedChannels, result.isHdr());
 
                 passed++;
             } catch (AssertionError e) {

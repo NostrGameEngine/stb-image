@@ -11,7 +11,6 @@ import java.util.function.IntFunction;
 public class TgaDecoder implements StbDecoder {
 
     // TGA header field values
-    private static final int TYPE_UNMAPPED_RGB = 2;
     private static final int TYPE_UNMAPPED_GRAY = 3;
     private static final int TYPE_RLE_RGB = 10;
     private static final int TYPE_RLE_GRAY = 11;
@@ -19,7 +18,6 @@ public class TgaDecoder implements StbDecoder {
     private static final int TYPE_MAPPED_RGB_RLE = 9;
 
     // Origin
-    private static final int ORIGIN_BOTTOM_LEFT = 0;
     private static final int ORIGIN_TOP_LEFT = 0x20;
 
     private ByteBuffer buffer;
@@ -200,10 +198,9 @@ public class TgaDecoder implements StbDecoder {
                         idx = readU8();
                     }
 
-                    int p = idx * 4;
                     int outPos = (y * width + x) * channels;
-
-                    if (colorMap != null && idx < colorMap.length / 4) {
+                    int p = paletteOffsetForIndex(idx);
+                    if (p >= 0) {
                         for (int c = 0; c < channels; c++) {
                             output.put(outPos + c, colorMap[p + c]);
                         }
@@ -286,9 +283,15 @@ public class TgaDecoder implements StbDecoder {
                     if (colorMap != null) {
                         // Paletted - use first byte as index
                         int idx = pixel[0] & 0xFF;
-                        int p = idx * 4;
-                        for (int c = 0; c < channels; c++) {
-                            output.put(outPos + c, colorMap[p + c]);
+                        int p = paletteOffsetForIndex(idx);
+                        if (p >= 0) {
+                            for (int c = 0; c < channels; c++) {
+                                output.put(outPos + c, colorMap[p + c]);
+                            }
+                        } else {
+                            for (int c = 0; c < channels; c++) {
+                                output.put(outPos + c, (byte) 0);
+                            }
                         }
                     } else if (bitsPerPixel == 24) {
                         // TGA stores as BGR
@@ -326,9 +329,15 @@ public class TgaDecoder implements StbDecoder {
 
                     if (colorMap != null) {
                         int idx = pixel[0] & 0xFF;
-                        int p = idx * 4;
-                        for (int c = 0; c < channels; c++) {
-                            output.put(outPos + c, colorMap[p + c]);
+                        int p = paletteOffsetForIndex(idx);
+                        if (p >= 0) {
+                            for (int c = 0; c < channels; c++) {
+                                output.put(outPos + c, colorMap[p + c]);
+                            }
+                        } else {
+                            for (int c = 0; c < channels; c++) {
+                                output.put(outPos + c, (byte) 0);
+                            }
                         }
                     } else if (bitsPerPixel == 24) {
                         // TGA stores as BGR
@@ -360,5 +369,16 @@ public class TgaDecoder implements StbDecoder {
         // Set limit to the actual data size since we use absolute positioning
         output.limit(width * height * channels);
         return output;
+    }
+
+    private int paletteOffsetForIndex(int idx) {
+        if (colorMap == null || colorMapLength <= 0) {
+            return -1;
+        }
+        int localIndex = idx - colorMapOrigin;
+        if (localIndex < 0 || localIndex >= colorMapLength) {
+            return -1;
+        }
+        return localIndex * 4;
     }
 }
