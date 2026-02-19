@@ -19,12 +19,25 @@ public class HdrDecoder implements StbDecoder {
     private int width;
     private int height;
 
+    /**
+     * Tests if the source starts with a Radiance HDR signature.
+     *
+     * @param buffer source bytes
+     * @return true if HDR signature is present
+     */
     public static boolean isHdr(ByteBuffer buffer) {
         ByteBuffer probe = buffer.duplicate();
         probe.position(0);
         return startsWith(probe, HDR_SIGNATURE) || startsWith(probe, HDR_SIGNATURE_ALT);
     }
 
+    /**
+     * Creates an HDR decoder instance.
+     *
+     * @param buffer source data
+     * @param allocator output allocator
+     * @param flipVertically true to vertically flip decoded output
+     */
     public HdrDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
         this.buffer = buffer.duplicate();
         this.allocator = allocator;
@@ -32,6 +45,9 @@ public class HdrDecoder implements StbDecoder {
         this.pos = 0;
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageInfo info() {
         int savedPos = pos;
@@ -49,11 +65,17 @@ public class HdrDecoder implements StbDecoder {
         }
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public IntFunction<ByteBuffer> getAllocator() {
         return allocator;
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageResult load(int desiredChannels) {
         pos = 0;

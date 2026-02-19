@@ -125,6 +125,12 @@ public class JpegDecoder implements StbDecoder {
         ResampleRowFunc func;
     }
 
+    /**
+     * Tests whether the input starts with JPEG SOI marker bytes.
+     *
+     * @param buffer source bytes
+     * @return true for JPEG signature
+     */
     public static boolean isJpeg(ByteBuffer buffer) {
         if (buffer.remaining() < 2) return false;
         buffer = buffer.duplicate().order(ByteOrder.BIG_ENDIAN);
@@ -133,11 +139,21 @@ public class JpegDecoder implements StbDecoder {
         return b0 == 0xFF && b1 == 0xD8;
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public IntFunction<ByteBuffer> getAllocator() {
         return allocator;
     }
     
+    /**
+     * Creates a JPEG decoder instance.
+     *
+     * @param src source data
+     * @param allocator output allocator
+     * @param flipVertically true to vertically flip decoded output
+     */
     public JpegDecoder(ByteBuffer src, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
         // Respect caller's position/limit by slicing
         this.buffer = src.duplicate().order(ByteOrder.BIG_ENDIAN);
@@ -152,6 +168,9 @@ public class JpegDecoder implements StbDecoder {
     // Info-only parse (SOF scan)
     // ---------------------------
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageInfo info() {
         try {
@@ -200,6 +219,9 @@ public class JpegDecoder implements StbDecoder {
     // Full decode
     // ---------------------------
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageResult load(int desiredChannels) {
         parseHeaders(); // fills width/height/components + tables + allocates component buffers + parses SOS

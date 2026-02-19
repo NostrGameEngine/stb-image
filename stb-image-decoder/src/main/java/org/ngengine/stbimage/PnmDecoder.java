@@ -31,6 +31,12 @@ public class PnmDecoder implements StbDecoder {
     private boolean is16Bit;
     private boolean isFloat;
 
+    /**
+     * Tests whether the source starts with a supported PNM magic value.
+     *
+     * @param buffer source bytes
+     * @return true when signature is a supported PNM variant
+     */
     public static boolean isPnm(ByteBuffer buffer) {
         if (buffer.remaining() < 2) return false;
         buffer=buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
@@ -39,6 +45,13 @@ public class PnmDecoder implements StbDecoder {
         return b0 == 'P' && (b1 >= '1' && b1 <= '9') && b1 != '8' && b1 != '9';
     }
  
+    /**
+     * Creates a PNM decoder instance.
+     *
+     * @param buffer source data
+     * @param allocator output allocator
+     * @param flipVertically true to vertically flip decoded output
+     */
     public PnmDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
         this.allocator = allocator;
@@ -47,11 +60,17 @@ public class PnmDecoder implements StbDecoder {
     }
 
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public IntFunction<ByteBuffer> getAllocator() {
         return allocator;
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageInfo info() {
         try {
@@ -64,6 +83,9 @@ public class PnmDecoder implements StbDecoder {
         }
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageResult load(int desiredChannels) {
         // Rewind buffer to start before reading header

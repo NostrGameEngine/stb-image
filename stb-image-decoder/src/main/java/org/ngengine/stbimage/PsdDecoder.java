@@ -22,6 +22,12 @@ public class PsdDecoder implements StbDecoder {
     private int bitsPerChannel;
     private int colorMode;
 
+    /**
+     * Tests whether the source starts with a valid PSD signature/version.
+     *
+     * @param buffer source bytes
+     * @return true when file header matches PSD
+     */
     public static boolean isPsd(ByteBuffer buffer) {
         if (buffer.remaining() < 12) return false;
         ByteBuffer probe = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
@@ -30,11 +36,21 @@ public class PsdDecoder implements StbDecoder {
         return sig == PSD_SIGNATURE && (version == 1 || version == 2);
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public IntFunction<ByteBuffer> getAllocator() {
         return allocator;
     }
 
+    /**
+     * Creates a PSD decoder instance.
+     *
+     * @param buffer source data
+     * @param allocator output allocator
+     * @param flipVertically true to vertically flip decoded output
+     */
     public PsdDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
         this.allocator = allocator;
@@ -42,6 +58,9 @@ public class PsdDecoder implements StbDecoder {
         this.pos = 0;
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageInfo info() {
         int saved = pos;
@@ -56,6 +75,9 @@ public class PsdDecoder implements StbDecoder {
         }
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageResult load(int desiredChannels) {
         pos = 0;

@@ -32,7 +32,12 @@ public class BmpDecoder implements StbDecoder{
     private int maskB;
     private int maskA;
 
-
+    /**
+     * Tests if the buffer starts with BMP magic bytes.
+     *
+     * @param buffer source bytes
+     * @return true if BMP signature matches
+     */
     public static boolean isBmp(ByteBuffer buffer) {
         if (buffer.remaining() < 2) return false;
         buffer = buffer.duplicate();
@@ -41,7 +46,13 @@ public class BmpDecoder implements StbDecoder{
         return b0 == 'B' && b1 == 'M';
     }
 
-    
+    /**
+     * Creates a BMP decoder instance.
+     *
+     * @param buffer source data
+     * @param allocator output allocator
+     * @param flipVertically true to flip decoded rows
+     */
     public BmpDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
         this.buffer.position(0);
@@ -49,6 +60,9 @@ public class BmpDecoder implements StbDecoder{
         this.flipVertically = flipVertically;
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageInfo info() {
         if (!readSignature()) {
@@ -93,11 +107,17 @@ public class BmpDecoder implements StbDecoder{
         return new StbImageInfo(width, height, infoChannels, false, StbImageInfo.ImageFormat.BMP);
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public IntFunction<ByteBuffer> getAllocator() {
         return allocator;
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageResult load(int desiredChannels) {
         if (!readSignature()) {

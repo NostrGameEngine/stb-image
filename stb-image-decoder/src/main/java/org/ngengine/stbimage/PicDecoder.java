@@ -30,6 +30,13 @@ public class PicDecoder implements StbDecoder {
         int channel;
     }
 
+    /**
+     * Creates a PIC decoder instance.
+     *
+     * @param buffer source data
+     * @param allocator output allocator
+     * @param flipVertically true to vertically flip decoded output
+     */
     public PicDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
         this.allocator = allocator;
@@ -37,6 +44,12 @@ public class PicDecoder implements StbDecoder {
         this.pos = 0;
     }
 
+    /**
+     * Tests whether the source starts with Softimage PIC magic values.
+     *
+     * @param buffer source bytes
+     * @return true when signature and tag match PIC
+     */
     public static boolean isPic(ByteBuffer buffer) {
         if (buffer.remaining() < 96) {
             return false;
@@ -51,12 +64,18 @@ public class PicDecoder implements StbDecoder {
                 && (b.get(p + 90) & 0xFF) == 'C' && (b.get(p + 91) & 0xFF) == 'T';
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageInfo info() {
         parseHeaderAndPackets(false);
         return new StbImageInfo(width, height, srcChannels, false, StbImageInfo.ImageFormat.PIC);
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageResult load(int desiredChannels) {
         PicPacket[] packets = parseHeaderAndPackets(true);
@@ -79,6 +98,9 @@ public class PicDecoder implements StbDecoder {
         return new StbImageResult(out, width, height, desiredChannels, desiredChannels, false, false);
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public IntFunction<ByteBuffer> getAllocator() {
         return allocator;

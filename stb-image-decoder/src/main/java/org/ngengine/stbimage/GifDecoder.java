@@ -60,6 +60,12 @@ public class GifDecoder implements StbDecoder {
         }
     }
 
+    /**
+     * Tests whether the source starts with a GIF87a/GIF89a signature.
+     *
+     * @param buffer source bytes
+     * @return true if the signature indicates GIF
+     */
     public static boolean isGif(ByteBuffer buffer) {
         if (buffer.remaining() < 6) return false;
         ByteBuffer b = buffer.duplicate();
@@ -69,11 +75,21 @@ public class GifDecoder implements StbDecoder {
             && (sig[4] == '7' || sig[4] == '9') && sig[5] == 'a';
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public IntFunction<ByteBuffer> getAllocator() {
         return allocator;
     }
 
+    /**
+     * Creates a GIF decoder instance.
+     *
+     * @param buffer source data
+     * @param allocator output allocator
+     * @param flipVertically true to flip decoded rows
+     */
     public GifDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
         this.allocator = allocator;
@@ -81,6 +97,9 @@ public class GifDecoder implements StbDecoder {
         this.pos = 0;
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageInfo info() {
         try {
@@ -104,6 +123,12 @@ public class GifDecoder implements StbDecoder {
         }
     }
 
+    /**
+     * Decodes and returns the first frame (stb-style load behavior).
+     *
+     * @param desiredChannels requested channel count
+     * @return decoded first frame
+     */
     @Override
     public StbImageResult load(int desiredChannels) {
         ensureParsed();
@@ -133,15 +158,31 @@ public class GifDecoder implements StbDecoder {
         return toResult(frame.rgba, desiredChannels);
     }
 
+    /**
+     * Returns the number of decoded frames.
+     *
+     * @return frame count
+     */
     public int getFrameCount() {
         ensureParsed();
         return frames.size();
     }
 
+    /**
+     * Indicates whether the GIF contains more than one frame.
+     *
+     * @return true for animated GIFs
+     */
     public boolean isAnimated() {
         return getFrameCount() > 1;
     }
 
+    /**
+     * Returns delay in milliseconds for the last frame returned by {@link #load(int)}
+     * or {@link #loadNextFrame(int)}.
+     *
+     * @return frame delay in milliseconds
+     */
     public int getLastFrameDelayMs() {
         return lastFrameDelayMs;
     }

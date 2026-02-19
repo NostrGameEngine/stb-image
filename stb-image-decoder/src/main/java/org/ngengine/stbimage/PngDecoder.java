@@ -47,6 +47,12 @@ public class PngDecoder implements StbDecoder {
 
 
    
+    /**
+     * Tests whether the buffer starts with a PNG signature.
+     *
+     * @param buffer source bytes
+     * @return true if signature matches PNG
+     */
     public static boolean isPng(ByteBuffer buffer) {
         if (buffer.remaining() < 8) return false;
         buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
@@ -56,6 +62,13 @@ public class PngDecoder implements StbDecoder {
             && sig[4] == 0x0D && sig[5] == 0x0A && sig[6] == 0x1A && sig[7] == 0x0A;
     }
 
+    /**
+     * Creates a PNG decoder instance.
+     *
+     * @param buffer source data
+     * @param allocator output allocator
+     * @param flipVertically true to flip decoded rows
+     */
     public PngDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
         this.allocator = allocator;
@@ -63,19 +76,35 @@ public class PngDecoder implements StbDecoder {
         this.pos = 0;
     }
 
+    /**
+     * Enables/disables iPhone CgBI BGR(A)-to-RGB(A) conversion.
+     *
+     * @param convertIphonePngToRgb true to convert channels
+     */
     public void setConvertIphonePngToRgb(boolean convertIphonePngToRgb) {
         this.convertIphonePngToRgb = convertIphonePngToRgb;
     }
 
+    /**
+     * Enables/disables iPhone PNG unpremultiply by alpha.
+     *
+     * @param unpremultiplyOnLoad true to unpremultiply on decode
+     */
     public void setUnpremultiplyOnLoad(boolean unpremultiplyOnLoad) {
         this.unpremultiplyOnLoad = unpremultiplyOnLoad;
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public IntFunction<ByteBuffer> getAllocator() {
         return allocator;
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageInfo info() {
         pos = 0;
@@ -99,6 +128,9 @@ public class PngDecoder implements StbDecoder {
         return null;
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageResult load(int desiredChannels) {
         pos = 0;

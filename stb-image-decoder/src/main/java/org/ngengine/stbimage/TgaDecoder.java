@@ -39,11 +39,21 @@ public class TgaDecoder implements StbDecoder {
 
 
  
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public IntFunction<ByteBuffer> getAllocator() {
         return allocator;
     }
 
+    /**
+     * Creates a TGA decoder instance.
+     *
+     * @param buffer source data
+     * @param allocator output allocator
+     * @param flipVertically true to vertically flip decoded output
+     */
     public TgaDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
         this.buffer.position(0);
@@ -51,6 +61,12 @@ public class TgaDecoder implements StbDecoder {
         this.flipVertically = flipVertically;
     }
 
+    /**
+     * Performs a lightweight TGA probe.
+     *
+     * @param src source bytes
+     * @return true when the source can be considered a potential TGA payload
+     */
     public static boolean isTga(ByteBuffer src) {
         if (src.remaining() < 18)
             return false;
@@ -68,6 +84,9 @@ public class TgaDecoder implements StbDecoder {
         return b0 | (b1 << 8);
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageInfo info() {
         try {
@@ -79,6 +98,9 @@ public class TgaDecoder implements StbDecoder {
         }
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public StbImageResult load(int desiredChannels) {
         readHeader();

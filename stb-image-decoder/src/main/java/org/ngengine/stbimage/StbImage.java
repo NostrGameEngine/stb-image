@@ -35,6 +35,12 @@ public class StbImage {
 
     private List<DecoderRegistration> decoders = new ArrayList<>();
 
+    /**
+     * Registers a decoder type and its format probe.
+     *
+     * @param decoderClass decoder class with constructor (ByteBuffer, IntFunction, boolean)
+     * @param formatChecker predicate that returns true when buffer matches decoder format
+     */
     public void registerDecoder(Class<? extends StbDecoder> decoderClass, Predicate<ByteBuffer> formatChecker) {
         if(decoders.stream().anyMatch(reg -> reg.decoderClass.equals(decoderClass))) {
             throw new IllegalArgumentException("Decoder already registered: " + decoderClass.getName());
@@ -42,14 +48,27 @@ public class StbImage {
         decoders.add(new DecoderRegistration(decoderClass, formatChecker));
     }
 
+    /**
+     * Unregisters a decoder previously added with {@link #registerDecoder(Class, Predicate)}.
+     *
+     * @param decoderClass decoder class to remove
+     */
     public void unregisterDecoder(Class<? extends StbDecoder> decoderClass) {
         decoders.removeIf(reg -> reg.decoderClass.equals(decoderClass));
     }
 
+    /**
+     * Creates an instance using heap allocation ({@link ByteBuffer#allocate(int)}).
+     */
     public StbImage() {
         this(null);
     }
 
+    /**
+     * Creates an instance with a custom output buffer allocator.
+     *
+     * @param allocator allocation strategy, or null to use {@link ByteBuffer#allocate(int)}
+     */
     public StbImage(IntFunction<ByteBuffer> allocator){
         this.allocator = allocator==null?ByteBuffer::allocate:allocator;
         registerDecoder(PngDecoder.class, PngDecoder::isPng);
@@ -63,26 +82,58 @@ public class StbImage {
         registerDecoder(TgaDecoder.class, TgaDecoder::isTga);
     }
 
+    /**
+     * Returns the allocator used for output buffers.
+     *
+     * @return allocator function
+     */
     public IntFunction<ByteBuffer> getAllocator() {
         return allocator;
     }
 
+    /**
+     * Enables/disables automatic iPhone PNG BGR->RGB conversion for CgBI PNGs.
+     *
+     * @param convertIphonePngToRgb true to convert CgBI channel order to RGB(A)
+     */
     public void setConvertIphonePngToRgb(boolean convertIphonePngToRgb) {
         this.convertIphonePngToRgb = convertIphonePngToRgb;
     }
 
+    /**
+     * Returns whether iPhone PNG channel conversion is enabled.
+     *
+     * @return true when CgBI PNGs are converted from BGR(A) to RGB(A)
+     */
     public boolean isConvertIphonePngToRgb() {
         return convertIphonePngToRgb;
     }
 
+    /**
+     * Enables/disables unpremultiply for iPhone PNG alpha data.
+     *
+     * @param unpremultiplyOnLoad true to unpremultiply by alpha during decode
+     */
     public void setUnpremultiplyOnLoad(boolean unpremultiplyOnLoad) {
         this.unpremultiplyOnLoad = unpremultiplyOnLoad;
     }
 
+    /**
+     * Returns whether iPhone PNG unpremultiply is enabled.
+     *
+     * @return true when unpremultiply is enabled
+     */
     public boolean isUnpremultiplyOnLoad() {
         return unpremultiplyOnLoad;
     }
 
+    /**
+     * Selects and instantiates a decoder for the provided buffer.
+     *
+     * @param buffer input image bytes
+     * @param flipVertically true to vertically flip decoded output
+     * @return matching decoder instance
+     */
     public StbDecoder getDecoder(ByteBuffer buffer, boolean flipVertically) {
         if (buffer.remaining() < 12) {
             throw new StbFailureException("Buffer too small to determine format");
@@ -107,6 +158,12 @@ public class StbImage {
         throw new StbFailureException("Unknown or unsupported image format");
     }
    
+    /**
+     * Validates image dimensions against stb-style safety limits.
+     *
+     * @param width image width
+     * @param height image height
+     */
     public static void validateDimensions(int width, int height) {
         if (width <= 0 || height <= 0) {
             throw new StbFailureException("Invalid image dimensions: " + width + "x" + height);
@@ -120,6 +177,18 @@ public class StbImage {
         }
     }
 
+    /**
+     * Converts interleaved pixel channels between 1/2/3/4-channel layouts.
+     *
+     * @param allocator destination allocator
+     * @param src source interleaved pixel buffer
+     * @param srcChannels source channel count
+     * @param width image width
+     * @param height image height
+     * @param desiredChannels target channel count
+     * @param is16Bit true for 16-bit channel elements
+     * @return converted buffer
+     */
     public static ByteBuffer convertChannels(IntFunction<ByteBuffer> allocator, ByteBuffer src, int srcChannels, int width, int height, int desiredChannels, boolean is16Bit) {
         if (srcChannels < 1 || srcChannels > 4 || desiredChannels < 1 || desiredChannels > 4) {
             throw new StbFailureException("Unsupported format conversion");
@@ -221,10 +290,32 @@ public class StbImage {
         return out;
     }
 
+    /**
+     * Flips interleaved pixel data vertically.
+     *
+     * @param allocator destination allocator
+     * @param src source pixels
+     * @param width image width
+     * @param height image height
+     * @param channels channel count
+     * @param is16Bit true for 16-bit elements (2 bytes per channel)
+     * @return vertically flipped buffer
+     */
     public static ByteBuffer verticalFlip(IntFunction<ByteBuffer> allocator, ByteBuffer src, int width, int height, int channels, boolean is16Bit) {
         return verticalFlip(allocator, src, width, height, channels, is16Bit ? 2 : 1);
     }
 
+    /**
+     * Flips interleaved pixel data vertically using explicit channel byte width.
+     *
+     * @param allocator destination allocator
+     * @param src source pixels
+     * @param width image width
+     * @param height image height
+     * @param channels channel count
+     * @param bytesPerChannel bytes per channel element
+     * @return vertically flipped buffer
+     */
     public static ByteBuffer verticalFlip(IntFunction<ByteBuffer> allocator, ByteBuffer src, int width, int height, int channels, int bytesPerChannel) {
         int rowSize = width * channels * bytesPerChannel;
         int totalSize = width * height * channels * bytesPerChannel;

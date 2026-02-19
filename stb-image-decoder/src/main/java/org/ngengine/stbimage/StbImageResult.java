@@ -16,6 +16,17 @@ public class StbImageResult {
     private final boolean is16Bit;
     private final boolean isHdr;
 
+    /**
+     * Creates a decoded image payload container.
+     *
+     * @param data raw interleaved pixel data
+     * @param width image width
+     * @param height image height
+     * @param channels output channel count
+     * @param requestedChannels originally requested channel count
+     * @param is16Bit true when data uses unsigned 16-bit channels
+     * @param isHdr true when data uses float channels
+     */
     public StbImageResult(ByteBuffer data, int width, int height, int channels, int requestedChannels, boolean is16Bit, boolean isHdr) {
         this.data = data;
         this.width = width;
@@ -39,26 +50,56 @@ public class StbImageResult {
         return data;
     }
 
+    /**
+     * Returns image width in pixels.
+     *
+     * @return width
+     */
     public int getWidth() {
         return width;
     }
 
+    /**
+     * Returns image height in pixels.
+     *
+     * @return height
+     */
     public int getHeight() {
         return height;
     }
 
+    /**
+     * Returns the effective channel count in {@link #getData()}.
+     *
+     * @return channel count
+     */
     public int getChannels() {
         return channels;
     }
 
+    /**
+     * Returns the channel count requested by the caller.
+     *
+     * @return requested channel count
+     */
     public int getRequestedChannels() {
         return requestedChannels;
     }
 
+    /**
+     * Indicates 16-bit channel storage.
+     *
+     * @return true for 16-bit output
+     */
     public boolean is16Bit() {
         return is16Bit;
     }
 
+    /**
+     * Indicates floating-point HDR storage.
+     *
+     * @return true for HDR float output
+     */
     public boolean isHdr() {
         return isHdr;
     }
