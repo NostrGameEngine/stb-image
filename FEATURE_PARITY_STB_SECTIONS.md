@@ -119,6 +119,7 @@ Quality:
 |---|---|---|---|
 | first-frame decode | yes | A | |
 | RGBA composition path | yes | A | |
+| first-frame untouched-pixel background policy | yes (configurable) | A | default keeps untouched pixels transparent; stb-style fill is available via `StbImage#setFillGifFirstFrameBackground(true)` (or `setFillFirstFrameBackground(true)` on decoder). |
 | animated stepping API | divergence in shape | A+ | Parity plus explicit frame-by-frame API surface. |
 | disposal/transparency sequencing | yes | A | |
 
@@ -151,4 +152,3 @@ Quality:
 | Sub-feature | Parity | Quality | Notes |
 |---|---|---|---|
 | Softimage PIC decoder | yes | A | Implemented and registered. |
-

@@ -44,6 +44,7 @@ Quality labels:
 | BMP | BI_RGB/bitfields/paletted | yes | yes | A | |
 | BMP | RLE4/RLE8 | no (rejected in stb path) | yes | A+ | Parity plus additional decode capability. |
 | GIF | first-frame decode + RGBA composition | yes | yes | A | |
+| GIF | first-frame untouched-pixel background policy | stb-style background fill default | transparent default (configurable) | A | defaults to modern viewer-friendly transparency; stb behavior available via `StbImage#setFillGifFirstFrameBackground(true)` (or decoder-level override). |
 | GIF | animated frame stepping | internal in stb | decoder API `loadNextFrame` | A+ | Parity plus explicit frame-by-frame API surface. |
 | TGA | uncompressed/RLE/mapped/origin | yes | yes | A | |
 | PSD | composited RGB 8/16-bit + raw/RLE | yes | yes | A | |

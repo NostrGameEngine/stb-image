@@ -23,6 +23,7 @@ public class StbImage {
     private final IntFunction<ByteBuffer> allocator;
     private boolean convertIphonePngToRgb = false;
     private boolean unpremultiplyOnLoad = false;
+    private boolean fillGifFirstFrameBackground = false;
 
     private static class DecoderRegistration {
         Class<? extends StbDecoder> decoderClass;
@@ -128,6 +129,26 @@ public class StbImage {
     }
 
     /**
+     * Enables/disables logical-screen background fill for untouched pixels on GIF first frame.
+     *
+     * <p>True matches stb_image behavior. False keeps untouched pixels transparent.</p>
+     *
+     * @param fillGifFirstFrameBackground true to match stb-style first-frame fill
+     */
+    public void setFillGifFirstFrameBackground(boolean fillGifFirstFrameBackground) {
+        this.fillGifFirstFrameBackground = fillGifFirstFrameBackground;
+    }
+
+    /**
+     * Returns whether GIF first-frame untouched pixels are filled from background color.
+     *
+     * @return true when stb-style first-frame background fill is enabled
+     */
+    public boolean isFillGifFirstFrameBackground() {
+        return fillGifFirstFrameBackground;
+    }
+
+    /**
      * Selects and instantiates a decoder for the provided buffer.
      *
      * @param buffer input image bytes
@@ -148,6 +169,9 @@ public class StbImage {
                         PngDecoder pngDecoder = (PngDecoder) decoder;
                         pngDecoder.setConvertIphonePngToRgb(convertIphonePngToRgb);
                         pngDecoder.setUnpremultiplyOnLoad(unpremultiplyOnLoad);
+                    } else if (decoder instanceof GifDecoder) {
+                        GifDecoder gifDecoder = (GifDecoder) decoder;
+                        gifDecoder.setFillFirstFrameBackground(fillGifFirstFrameBackground);
                     }
                     return decoder;
                 } catch (Exception e) {

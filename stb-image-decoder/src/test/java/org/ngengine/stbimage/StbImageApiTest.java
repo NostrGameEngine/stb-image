@@ -34,6 +34,7 @@ public class StbImageApiTest {
         StbImage stb = new StbImage();
         assertFalse(stb.isConvertIphonePngToRgb());
         assertFalse(stb.isUnpremultiplyOnLoad());
+        assertFalse(stb.isFillGifFirstFrameBackground());
     }
 
     @Test
@@ -41,8 +42,10 @@ public class StbImageApiTest {
         StbImage stb = new StbImage();
         stb.setConvertIphonePngToRgb(true);
         stb.setUnpremultiplyOnLoad(true);
+        stb.setFillGifFirstFrameBackground(true);
         assertTrue(stb.isConvertIphonePngToRgb());
         assertTrue(stb.isUnpremultiplyOnLoad());
+        assertTrue(stb.isFillGifFirstFrameBackground());
     }
 
     @Test
@@ -86,6 +89,19 @@ public class StbImageApiTest {
         assertEquals((byte) 64, rgba.get(1));
         assertEquals((byte) 128, rgba.get(2));
         assertEquals((byte) 128, rgba.get(3));
+    }
+
+    @Test
+    void testGifBackgroundToggleIsWiredToGifDecoder() throws Exception {
+        StbImage stb = new StbImage();
+        stb.setFillGifFirstFrameBackground(true);
+        byte[] gifData = loadResourceBytes("testData/image/single.gif");
+        StbDecoder decoder = stb.getDecoder(ByteBuffer.wrap(gifData), false);
+        assertTrue(decoder instanceof GifDecoder);
+
+        Field field = GifDecoder.class.getDeclaredField("fillFirstFrameBackground");
+        field.setAccessible(true);
+        assertTrue(field.getBoolean(decoder));
     }
 
  

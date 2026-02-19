@@ -34,6 +34,8 @@ public class StbImagePixelTest {
     @BeforeAll
     static void setUp() throws IOException {
         stbImage = new StbImage();
+        // Reference binaries are generated with stb_image semantics.
+        stbImage.setFillGifFirstFrameBackground(true);
         
         // Load index.txt to get list of images
         loadImageIndex();
@@ -247,7 +249,6 @@ public class StbImagePixelTest {
     @Test
     void testAllImagesAgainstReference() throws IOException {
         int limit = testLimit("TEST_REF_LIMIT", Integer.MAX_VALUE);
-        boolean skipKnownProblematic = envFlag("TEST_REF_SKIP_KNOWN", true);
 
         int passed = 0;
         int failed = 0;
@@ -266,15 +267,7 @@ public class StbImagePixelTest {
             if (filename.contains("truncated") || filename.equals("random.bin")) {
                 continue;
             }
-            if (skipKnownProblematic) {
-                // Temporary allowlist for known mismatch groups while decoder parity work is in progress
-                if (filename.contains("height") || filename.contains("_height") || filename.contains("specular") ||
-                    filename.endsWith(".gif") || filename.contains("cmyk") ||
-                    filename.contains("diffuse") || filename.contains("Diffuse") || filename.contains("diffus") ||
-                    filename.equals("Dependency-Graph.png")) {
-                    continue;
-                }
-            }
+           
 
             // Convert project-relative path to classpath-relative path
             String classpathPath = imagePath;

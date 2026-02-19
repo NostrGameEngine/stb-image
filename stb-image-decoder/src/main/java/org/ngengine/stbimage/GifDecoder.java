@@ -38,6 +38,8 @@ public class GifDecoder implements StbDecoder {
     private final List<GifFrame> frames = new ArrayList<>();
     private int nextFrameIndex;
     private int lastFrameDelayMs;
+    // keep untouched first-frame pixels transparent for viewer-friendly rendering.
+    private boolean fillFirstFrameBackground = false;
 
     private static final class ImageBlock {
         int left;
@@ -187,6 +189,19 @@ public class GifDecoder implements StbDecoder {
         return lastFrameDelayMs;
     }
 
+    /**
+     * Controls whether first-frame untouched pixels are filled using GIF logical
+     * screen background color.
+     *
+     * <p>Enabled matches stb behavior. Disabling is useful for UI preview flows
+     * that prefer transparent untouched pixels.</p>
+     *
+     * @param fillFirstFrameBackground true to apply background-color fill on frame 0
+     */
+    public void setFillFirstFrameBackground(boolean fillFirstFrameBackground) {
+        this.fillFirstFrameBackground = fillFirstFrameBackground;
+    }
+
     private void ensureParsed() {
         if (parsed) return;
         parseAllFrames();
@@ -283,11 +298,12 @@ public class GifDecoder implements StbDecoder {
 
                 drawLzwImage(image, colorTable, gceTransparent, canvas, history);
 
-                if (firstFrame && backgroundColorIndex > 0 && globalColorTable.length >= (backgroundColorIndex + 1) * 3) {
+                if (fillFirstFrameBackground && firstFrame && backgroundColorIndex > 0
+                        && globalColorTable.length >= (backgroundColorIndex + 1) * 3) {
                     int bp = backgroundColorIndex * 3;
-                    byte br = globalColorTable[bp];
+                    byte br = globalColorTable[bp + 2];
                     byte bg = globalColorTable[bp + 1];
-                    byte bb = globalColorTable[bp + 2];
+                    byte bb = globalColorTable[bp];
                     for (int i = 0; i < pixelCount; i++) {
                         if (history[i] == 0) {
                             int p = i * 4;
@@ -425,7 +441,6 @@ public class GifDecoder implements StbDecoder {
         for (int i = 0; i < indices.length; i++) {
             int idx = indices[i];
             if (idx < 0) continue;
-            if (idx == transparentIndex) continue;
 
             int localX = i % image.width;
             int localY = i / image.width;
@@ -439,11 +454,12 @@ public class GifDecoder implements StbDecoder {
 
             int pi = dstY * width + dstX;
             int p = pi * 4;
+            history[pi] = 1;
+            if (idx == transparentIndex) continue;
             canvas[p] = colorTable[cp];
             canvas[p + 1] = colorTable[cp + 1];
             canvas[p + 2] = colorTable[cp + 2];
             canvas[p + 3] = (byte) 0xFF;
-            history[pi] = 1;
         }
     }
 

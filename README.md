@@ -85,9 +85,5 @@ Two machine generated parity reports are included:
 
 ## License 
 
-[Public Domain](LICENSE) 
-or
-[BSD-3-Clause](LICENSE-alt)
-
-which one you prefer.
+[Public Domain](LICENSE) or [BSD-3-Clause](LICENSE-alt), which one you prefer.
 

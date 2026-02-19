@@ -41,6 +41,7 @@ class GifAnimationTest {
     @Test
     void testAnimatedGifFrameByFrame() throws IOException {
         StbImage stb = new StbImage();
+        stb.setFillGifFirstFrameBackground(true);
         GifDecoder decoder = (GifDecoder) stb.getDecoder(loadResource("testData/image/animated.gif"), false);
 
         StbImageResult frame0 = decoder.load(4);
@@ -75,6 +76,7 @@ class GifAnimationTest {
     @Test
     void testAnimatedGifFirstFrameParityWithReference() throws IOException {
         StbImage stb = new StbImage();
+        stb.setFillGifFirstFrameBackground(true);
         GifDecoder decoder = (GifDecoder) stb.getDecoder(loadResource("testData/image/animated.gif"), false);
         StbImageResult frame0 = decoder.load(4);
 
