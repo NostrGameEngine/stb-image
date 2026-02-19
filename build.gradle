@@ -1,16 +1,17 @@
-/*
- * stb_image Java - Pure Java implementation of stb_image.h
- * Designed for jMonkeyEngine and TeaVM
- */
+import org.gradle.api.tasks.SourceSetContainer
 
 plugins {
-    id 'java-library'
-    id 'maven-publish'
+    id 'io.github.gradle-nexus.publish-plugin' version '2.0.0'
 }
 
+def repoSlug = providers.environmentVariable("GITHUB_REPOSITORY")
+        .orElse("NostrGameEngine/stb-image-decoder")
+        .get()
+def projectUrl = "https://github.com/${repoSlug}"
+
 allprojects {
-    group = 'com.stb'
-    version = '1.0.0'
+    group = 'org.ngengine'
+    version = providers.environmentVariable("PROJECT_VERSION").orElse("1.0.0-SNAPSHOT").get()
 
     repositories {
         mavenCentral()
@@ -20,14 +21,22 @@ allprojects {
 subprojects {
     apply plugin: 'java-library'
     apply plugin: 'maven-publish'
+    apply plugin: 'signing'
 
     java {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+        withSourcesJar()
+        withJavadocJar()
     }
 
-    tasks.withType(JavaCompile) {
+    tasks.withType(JavaCompile).configureEach {
         options.encoding = 'UTF-8'
+    }
+
+    tasks.withType(Javadoc).configureEach {
+        options.encoding = 'UTF-8'
+        options.addStringOption('Xdoclint:none', '-quiet')
     }
 
     test {
@@ -38,7 +47,79 @@ subprojects {
         publications {
             mavenJava(MavenPublication) {
                 from components.java
+                pom {
+                    name = project.name
+                    description = "Experimental Java port of stb_image.h"
+                    url = projectUrl
+                    licenses {
+                        license {
+                            name = 'MIT License'
+                            url = 'https://opensource.org/licenses/MIT'
+                        }
+                    }
+                    developers {
+                        developer {
+                            id = 'contributors'
+                            name = 'Project Contributors'
+                        }
+                    }
+                    scm {
+                        url = projectUrl
+                        connection = "scm:git:${projectUrl}.git"
+                        developerConnection = "scm:git:${projectUrl}.git"
+                    }
+                }
+            }
+        }
+        repositories {
+            maven {
+                name = "GitHubPackages"
+                url = uri("https://maven.pkg.github.com/${repoSlug}")
+                credentials {
+                    username = providers.environmentVariable("GITHUB_ACTOR").orNull
+                    password = providers.environmentVariable("GITHUB_TOKEN").orNull
+                }
             }
         }
     }
+
+    signing {
+        def signingKey = providers.environmentVariable("SIGNING_KEY").orNull
+        def signingPassword = providers.environmentVariable("SIGNING_PASSWORD").orNull
+        if (signingKey && signingPassword) {
+            useInMemoryPgpKeys(signingKey, signingPassword)
+            sign publishing.publications
+        }
+    }
+}
+
+nexusPublishing {
+    repositories {
+        sonatype {
+            username = providers.environmentVariable("SONATYPE_USERNAME").orNull
+            password = providers.environmentVariable("SONATYPE_PASSWORD").orNull
+            nexusUrl.set(uri("https://ossrh-staging-api.central.sonatype.com/service/local/"))
+            snapshotRepositoryUrl.set(uri("https://central.sonatype.com/repository/maven-snapshots/"))
+        }
+    }
+}
+
+tasks.register("aggregateJavadocs", Javadoc) {
+    group = "documentation"
+    description = "Generates aggregated Javadocs for all modules."
+    destinationDir = file("$buildDir/docs/javadoc")
+    source subprojects.collect { p ->
+        p.extensions.getByType(SourceSetContainer).named("main").get().allJava
+    }
+    classpath = files(subprojects.collect { p ->
+        p.extensions.getByType(SourceSetContainer).named("main").get().compileClasspath
+    })
+    options.encoding = 'UTF-8'
+    options.addStringOption('Xdoclint:none', '-quiet')
+}
+
+tasks.register("javadocPages") {
+    group = "documentation"
+    description = "Builds Javadoc pages for publishing on GitHub Pages."
+    dependsOn tasks.named("aggregateJavadocs")
 }

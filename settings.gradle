@@ -1,3 +1,6 @@
-rootProject.name = 'stb_image'
+plugins {
+    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+}
 
+rootProject.name = 'stb-image'
 include 'stb-image-decoder'

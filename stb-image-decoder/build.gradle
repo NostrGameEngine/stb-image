@@ -1,9 +1,9 @@
-/*
- * stb-image-decoder - Image decoding library
- */
-
-plugins {
-    id 'java-library'
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            artifactId = 'stb-image-decoder'
+        }
+    }
 }
 
 dependencies {

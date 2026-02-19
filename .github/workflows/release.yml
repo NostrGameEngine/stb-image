@@ -1,0 +1,160 @@
+name: Release and Docs
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Generate reference data
+        run: bash ./gen_ref.sh
+
+      - name: Build and run unit tests
+        run: ./gradlew clean test --no-daemon
+
+  publish-github-packages:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Publish to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          PROJECT_VERSION: ${{ github.ref_name }}
+        run: |
+          export PROJECT_VERSION="${PROJECT_VERSION#v}"
+          ./gradlew publishAllPublicationsToGitHubPackagesRepository --no-daemon
+
+  publish-maven-central-snapshot:
+    if: github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Publish snapshot to Maven Central (optional)
+        env:
+          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+          SIGNING_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          SIGNING_PASSWORD: ${{ secrets.GPG_PASSPHRASE }}
+          PROJECT_VERSION: 1.0.${{ github.run_number }}-SNAPSHOT
+        run: |
+          if [ -z "$SONATYPE_USERNAME" ] || [ -z "$SONATYPE_PASSWORD" ] || [ -z "$SIGNING_KEY" ] || [ -z "$SIGNING_PASSWORD" ]; then
+            echo "Maven Central snapshot publish skipped (missing secrets)."
+            exit 0
+          fi
+          ./gradlew publishToSonatype --no-daemon
+
+  # publish-maven-central-release:
+  #   if: startsWith(github.ref, 'refs/tags/v')
+  #   needs: verify
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: read
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+
+  #     - name: Set up JDK 21
+  #       uses: actions/setup-java@v4
+  #       with:
+  #         distribution: temurin
+  #         java-version: '21'
+  #         cache: gradle
+
+  #     - name: Publish release to Maven Central (optional)
+  #       env:
+  #         SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+  #         SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+  #         SIGNING_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+  #         SIGNING_PASSWORD: ${{ secrets.GPG_PASSPHRASE }}
+  #         PROJECT_VERSION: ${{ github.ref_name }}
+  #       run: |
+  #         if [ -z "$SONATYPE_USERNAME" ] || [ -z "$SONATYPE_PASSWORD" ] || [ -z "$SIGNING_KEY" ] || [ -z "$SIGNING_PASSWORD" ]; then
+  #           echo "Maven Central release publish skipped (missing secrets)."
+  #           exit 0
+  #         fi
+  #         export PROJECT_VERSION="${PROJECT_VERSION#v}"
+  #         ./gradlew publishToSonatype closeAndReleaseSonatypeStagingRepository --no-daemon
+
+  build-javadocs:
+    if: github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Build Javadocs
+        run: ./gradlew javadocPages --no-daemon
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/docs/javadoc
+
+  deploy-javadocs-pages:
+    if: github.ref == 'refs/heads/main'
+    needs: build-javadocs
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
