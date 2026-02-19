@@ -125,16 +125,16 @@ public class StbImageResult {
      * The returned array contains channel values.
      * For HDR, values are floats; otherwise, they're ints (0-255 or 0-65535).
      */
-    public int[] getPixel(int x, int y) {
+    public Number[] getPixel(int x, int y) {
         if (x < 0 || x >= width || y < 0 || y >= height) {
             throw new IllegalArgumentException("Coordinates out of bounds");
         }
         int offset = (y * width + x) * channels * getBytesPerChannel();
-        int[] pixel = new int[channels];
+        Number[] pixel = new Number[channels];
         for (int i = 0; i < channels; i++) {
             if (isHdr) {
                 int floatOffset = offset + i * 4;
-                pixel[i] = Float.floatToIntBits(data.getFloat(floatOffset));
+                pixel[i] = data.getFloat(floatOffset);
             } else if (is16Bit) {
                 int shortOffset = offset + i * 2;
                 pixel[i] = Short.toUnsignedInt(data.getShort(shortOffset));
@@ -144,4 +144,6 @@ public class StbImageResult {
         }
         return pixel;
     }
+
+
 }
