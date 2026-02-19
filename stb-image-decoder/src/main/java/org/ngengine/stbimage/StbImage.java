@@ -47,6 +47,13 @@ public class StbImage {
             throw new IllegalArgumentException("Decoder already registered: " + decoderClass.getName());
         }
         decoders.add(new DecoderRegistration(decoderClass, formatChecker));
+
+        // Ensure tga decoder is the last
+        decoders.sort((a, b) -> {
+            if (a.decoderClass.equals(TgaDecoder.class)) return 1;
+            if (b.decoderClass.equals(TgaDecoder.class)) return -1;
+            return 0;
+        });
     }
 
     /**
