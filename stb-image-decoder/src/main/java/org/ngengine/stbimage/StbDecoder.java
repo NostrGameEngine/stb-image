@@ -1,6 +1,7 @@
 package org.ngengine.stbimage;
 
 import java.nio.ByteBuffer;
+import java.util.List;
 import java.util.function.IntFunction;
 
 /**
@@ -89,5 +90,24 @@ public interface StbDecoder {
             throw new StbFailureException("Decoder did not return HDR float data");
         }
         return result;
+    }
+
+
+    /**
+     * Loads the next frame for animated formats. For non-animated formats, this is equivalent to {@link #load(int)}.
+     * @param desiredChannels
+     * @return
+     */
+    public default StbImageResult loadNextFrame(int desiredChannels) {
+        return load(desiredChannels);
+    }
+
+    /**
+     * Loads all frames for animated formats. For non-animated formats, this returns a singleton list with the same result as {@link #load(int)}.
+     * @param desiredChannels
+     * @return
+     */
+    public default List<StbImageResult> loadAllFrames(int desiredChannels) {
+        return List.of(load(desiredChannels));
     }
 }

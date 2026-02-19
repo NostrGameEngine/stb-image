@@ -15,6 +15,7 @@ public class StbImageResult {
     private final int requestedChannels;
     private final boolean is16Bit;
     private final boolean isHdr;
+    private final int frameIndex;
 
     /**
      * Creates a decoded image payload container.
@@ -28,6 +29,22 @@ public class StbImageResult {
      * @param isHdr true when data uses float channels
      */
     public StbImageResult(ByteBuffer data, int width, int height, int channels, int requestedChannels, boolean is16Bit, boolean isHdr) {
+        this(data, width, height, channels, requestedChannels, is16Bit, isHdr, 0);
+    }
+
+    /**
+     * Creates a decoded image payload container.
+     *
+     * @param data raw interleaved pixel data
+     * @param width image width
+     * @param height image height
+     * @param channels output channel count
+     * @param requestedChannels originally requested channel count
+     * @param is16Bit true when data uses unsigned 16-bit channels
+     * @param isHdr true when data uses float channels
+     * @param frameIndex frame index for animated decodes (0 for still images)
+     */
+    public StbImageResult(ByteBuffer data, int width, int height, int channels, int requestedChannels, boolean is16Bit, boolean isHdr, int frameIndex) {
         this.data = data;
         this.width = width;
         this.height = height;
@@ -35,6 +52,7 @@ public class StbImageResult {
         this.requestedChannels = requestedChannels;
         this.is16Bit = is16Bit;
         this.isHdr = isHdr;
+        this.frameIndex = frameIndex;
     }
 
     /**
@@ -102,6 +120,15 @@ public class StbImageResult {
      */
     public boolean isHdr() {
         return isHdr;
+    }
+
+    /**
+     * Returns zero-based frame index for animated formats.
+     *
+     * @return frame index, 0 for still images
+     */
+    public int getFrameIndex() {
+        return frameIndex;
     }
 
     /**

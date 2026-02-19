@@ -148,6 +148,16 @@ public class ImageViewer extends JFrame {
             if (decoder instanceof GifDecoder) {
                 GifDecoder gifDecoder = (GifDecoder) decoder;
                 if (gifDecoder.isAnimated()) {
+                    int choice = JOptionPane.showConfirmDialog(
+                        this,
+                        "This GIF is animated. Preload all frames now?",
+                        "Animated GIF",
+                        JOptionPane.YES_NO_OPTION,
+                        JOptionPane.QUESTION_MESSAGE
+                    );
+                    if (choice == JOptionPane.YES_OPTION) {
+                        gifDecoder.loadAllFrames(4);
+                    }
                     animatedGifDecoder = gifDecoder;
                     startGifAnimation(path.getFileName().toString());
                 }

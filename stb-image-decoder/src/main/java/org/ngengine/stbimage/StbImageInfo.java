@@ -9,6 +9,7 @@ public class StbImageInfo {
     private final int channels;
     private final boolean is16Bit;
     private final ImageFormat format;
+    private final int numFrames;
 
     /**
      * Supported image formats known by this decoder set.
@@ -36,11 +37,26 @@ public class StbImageInfo {
      * @param format detected image format
      */
     public StbImageInfo(int width, int height, int channels, boolean is16Bit, ImageFormat format) {
+        this(width, height, channels, is16Bit, format, 1);
+    }
+
+    /**
+     * Creates image metadata.
+     *
+     * @param width image width
+     * @param height image height
+     * @param channels channel count
+     * @param is16Bit true for 16-bit source data
+     * @param format detected image format
+     * @param numFrames total frame count (1 for non-animated images)
+     */
+    public StbImageInfo(int width, int height, int channels, boolean is16Bit, ImageFormat format, int numFrames) {
         this.width = width;
         this.height = height;
         this.channels = channels;
         this.is16Bit = is16Bit;
         this.format = format;
+        this.numFrames = Math.max(1, numFrames);
     }
 
     /**
@@ -88,9 +104,19 @@ public class StbImageInfo {
         return format;
     }
 
+    /**
+     * Returns total frame count.
+     *
+     * @return number of frames (1 for still images)
+     */
+    public int getNumFrames() {
+        return numFrames;
+    }
+
     @Override
     public String toString() {
-        return String.format("StbImageInfo[%s %dx%d %d channels%s]",
-            format, width, height, channels, is16Bit ? " 16-bit" : "");
+        return String.format("StbImageInfo[%s %dx%d %d channels%s, %d frame%s]",
+            format, width, height, channels, is16Bit ? " 16-bit" : "",
+            numFrames, numFrames == 1 ? "" : "s");
     }
 }

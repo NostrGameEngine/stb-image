@@ -3,14 +3,17 @@ package org.ngengine.stbimage;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.IntFunction;
 
 /**
  * GIF decoder.
  *
- * Supports regular stbi_load-like first-frame decode through {@link #load(int)}
- * and frame-by-frame decode for animated GIFs through {@link #loadNextFrame(int)}.
+ * Supports regular stbi_load-like first-frame decode through {@link #load(int)},
+ * streaming frame-by-frame decode through {@link #loadNextFrame(int)}, and
+ * full materialization through {@link #loadAllFrames(int)}.
  */
 public class GifDecoder implements StbDecoder {
     private static final String GIF87_SIGNATURE = "GIF87a";
@@ -31,14 +34,30 @@ public class GifDecoder implements StbDecoder {
     private int globalColorTableSize;
     private byte[] globalColorTable;
     private int backgroundColorIndex;
-
     private boolean hasGlobalColorTable;
 
-    private boolean parsed;
-    private final List<GifFrame> frames = new ArrayList<>();
+    private boolean headerInitialized;
+    private boolean streamEnded;
+    private int frameCount = -1;
     private int nextFrameIndex;
     private int lastFrameDelayMs;
-    // keep untouched first-frame pixels transparent for viewer-friendly rendering.
+
+    private byte[] canvas;
+    private byte[] background;
+    private byte[] history;
+    private byte[] prevFrame;
+    private byte[] prevPrevFrame;
+    private int previousDisposal;
+    private boolean firstFrame;
+
+    private int gceDisposal;
+    private int gceTransparent;
+    private int gceDelayMs;
+
+    // Incremental cache: each decoded frame is retained for fast replay/seek.
+    private final List<GifFrame> frames = new ArrayList<>();
+
+    // Keep untouched first-frame pixels transparent for viewer-friendly rendering.
     private boolean fillFirstFrameBackground = false;
 
     private static final class ImageBlock {
@@ -53,11 +72,12 @@ public class GifDecoder implements StbDecoder {
     }
 
     private static final class GifFrame {
-        final byte[] rgba;
         final int delayMs;
+        final StbImageResult rgba;
+        final Map<Integer, StbImageResult> variants = new HashMap<>();
 
-        GifFrame(byte[] rgba, int delayMs) {
-            this.rgba = rgba;
+        GifFrame(StbImageResult rgbaResult, int delayMs) {
+            this.rgba = rgbaResult;
             this.delayMs = delayMs;
         }
     }
@@ -77,9 +97,6 @@ public class GifDecoder implements StbDecoder {
             && (sig[4] == '7' || sig[4] == '9') && sig[5] == 'a';
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
     public IntFunction<ByteBuffer> getAllocator() {
         return allocator;
@@ -93,34 +110,29 @@ public class GifDecoder implements StbDecoder {
      * @param flipVertically true to flip decoded rows
      */
     public GifDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
-        StbLimits.lock(); // Lock limits on decoder initialization
+        StbLimits.lock();
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
         this.allocator = allocator;
         this.flipVertically = flipVertically;
         this.pos = 0;
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
     public StbImageInfo info() {
         try {
+            int oldPos = pos;
             pos = 0;
+
             String signature = readString(6);
             if (!signature.equals(GIF87_SIGNATURE) && !signature.equals(GIF89_SIGNATURE)) {
+                pos = oldPos;
                 return null;
             }
 
-            width = readU16LE();
-            height = readU16LE();
-            int packed = readU8();
-            hasGlobalColorTable = (packed & 0x80) != 0;
-            globalColorTableSize = 1 << ((packed & 0x7) + 1);
-            backgroundColorIndex = readU8();
-            readU8(); // pixel aspect ratio
-
-            return new StbImageInfo(width, height, 4, false, StbImageInfo.ImageFormat.GIF);
+            int w = readU16LE();
+            int h = readU16LE();
+            pos = oldPos;
+            return new StbImageInfo(w, h, 4, false, StbImageInfo.ImageFormat.GIF, getFrameCount());
         } catch (Exception e) {
             return null;
         }
@@ -128,53 +140,100 @@ public class GifDecoder implements StbDecoder {
 
     /**
      * Decodes and returns the first frame (stb-style load behavior).
-     *
-     * @param desiredChannels requested channel count
-     * @return decoded first frame
      */
     @Override
     public StbImageResult load(int desiredChannels) {
-        ensureParsed();
+        ensureHeaderInitialized();
+
         if (frames.isEmpty()) {
-            throw new StbFailureException("No image data found");
+            GifFrame first = decodeNextFrameInternal();
+            if (first == null) {
+                throw new StbFailureException("No image data found");
+            }
+            addFrame(first);
         }
-        GifFrame first = frames.get(0);
-        lastFrameDelayMs = first.delayMs;
-        nextFrameIndex = frames.size() > 1 ? 1 : 0;
-        return toResult(first.rgba, desiredChannels);
+
+        GifFrame frame = frames.get(0);
+        lastFrameDelayMs = frame.delayMs;
+        nextFrameIndex = 1;
+        return toResult(frame, 0, desiredChannels);
     }
 
     /**
-     * Loads the next GIF frame, looping back to frame 0 after the last frame.
+     * Loads the next GIF frame in streaming mode. Once the trailer is reached,
+     * already decoded frames are replayed in a loop.
      */
+    @Override
     public StbImageResult loadNextFrame(int desiredChannels) {
-        ensureParsed();
-        if (frames.isEmpty()) {
-            throw new StbFailureException("No image data found");
-        }
-        if (nextFrameIndex >= frames.size()) {
+        ensureHeaderInitialized();
+
+        if (streamEnded && !frames.isEmpty() && nextFrameIndex >= frames.size()) {
             nextFrameIndex = 0;
         }
+
+        if (nextFrameIndex >= frames.size()) {
+            GifFrame decoded = decodeNextFrameInternal();
+            if (decoded != null) {
+                addFrame(decoded);
+            } else {
+                if (frames.isEmpty()) {
+                    throw new StbFailureException("No image data found");
+                }
+                nextFrameIndex = 0;
+            }
+        }
+
         GifFrame frame = frames.get(nextFrameIndex);
-        nextFrameIndex = (nextFrameIndex + 1) % frames.size();
         lastFrameDelayMs = frame.delayMs;
-        return toResult(frame.rgba, desiredChannels);
+        StbImageResult out = toResult(frame, nextFrameIndex, desiredChannels);
+        nextFrameIndex++;
+        if (streamEnded && nextFrameIndex >= frames.size()) {
+            nextFrameIndex = 0;
+        }
+        return out;
     }
 
     /**
-     * Returns the number of decoded frames.
+     * Decodes all frames and returns them.
      *
-     * @return frame count
+     * @param desiredChannels requested channel count
+     * @return all frames in playback order
+     */
+    @Override
+    public List<StbImageResult> loadAllFrames(int desiredChannels) {
+        ensureHeaderInitialized();
+        while (!streamEnded) {
+            GifFrame decoded = decodeNextFrameInternal();
+            if (decoded == null) {
+                break;
+            }
+            addFrame(decoded);
+        }
+
+        if (frames.isEmpty()) {
+            throw new StbFailureException("No image data found");
+        }
+
+        List<StbImageResult> out = new ArrayList<>(frames.size());
+        for (int i = 0; i < frames.size(); i++) {
+            out.add(toResult(frames.get(i), i, desiredChannels));
+        }
+        return out;
+    }
+
+    /**
+     * Returns the number of frames in the GIF stream.
      */
     public int getFrameCount() {
-        ensureParsed();
-        return frames.size();
+        if (frameCount >= 0) {
+            return frameCount;
+        }
+        frameCount = scanFrameCount();
+        return frameCount;
     }
 
     /**
      * Indicates whether the GIF contains more than one frame.
-     *
-     * @return true for animated GIFs
      */
     public boolean isAnimated() {
         return getFrameCount() > 1;
@@ -183,8 +242,6 @@ public class GifDecoder implements StbDecoder {
     /**
      * Returns delay in milliseconds for the last frame returned by {@link #load(int)}
      * or {@link #loadNextFrame(int)}.
-     *
-     * @return frame delay in milliseconds
      */
     public int getLastFrameDelayMs() {
         return lastFrameDelayMs;
@@ -196,25 +253,19 @@ public class GifDecoder implements StbDecoder {
      *
      * <p>Enabled matches stb behavior. Disabling is useful for UI preview flows
      * that prefer transparent untouched pixels.</p>
-     *
-     * @param fillFirstFrameBackground true to apply background-color fill on frame 0
      */
     public void setFillFirstFrameBackground(boolean fillFirstFrameBackground) {
         this.fillFirstFrameBackground = fillFirstFrameBackground;
     }
 
-    private void ensureParsed() {
-        if (parsed) return;
-        parseAllFrames();
-        parsed = true;
+    private void addFrame(GifFrame frame) {
+        frames.add(frame);
     }
 
-    private void parseAllFrames() {
-        pos = 0;
-        frames.clear();
-        nextFrameIndex = 0;
-        lastFrameDelayMs = 0;
+    private void ensureHeaderInitialized() {
+        if (headerInitialized) return;
 
+        pos = 0;
         String signature = readString(6);
         if (!signature.equals(GIF87_SIGNATURE) && !signature.equals(GIF89_SIGNATURE)) {
             throw new StbFailureException("Not a GIF file");
@@ -222,14 +273,13 @@ public class GifDecoder implements StbDecoder {
 
         width = readU16LE();
         height = readU16LE();
+        StbLimits.validateDimensions(width, height);
 
         int packed = readU8();
         hasGlobalColorTable = (packed & 0x80) != 0;
         globalColorTableSize = 1 << ((packed & 0x7) + 1);
         backgroundColorIndex = readU8();
         readU8(); // pixel aspect ratio
-
-        StbLimits.validateDimensions(width, height);
 
         if (hasGlobalColorTable) {
             globalColorTable = new byte[globalColorTableSize * 3];
@@ -243,53 +293,36 @@ public class GifDecoder implements StbDecoder {
 
         int pixelCount = StbLimits.checkedPixelCount(width, height);
         int rgbaSize = StbLimits.checkedImageBufferSize(width, height, 4, 1);
-        byte[] canvas = new byte[rgbaSize];
-        byte[] background = new byte[rgbaSize];
-        byte[] history = new byte[pixelCount];
-        byte[] prevFrame = null;
-        byte[] prevPrevFrame = null;
+        canvas = new byte[rgbaSize];
+        background = new byte[rgbaSize];
+        history = new byte[pixelCount];
+        prevFrame = null;
+        prevPrevFrame = null;
 
-        int previousDisposal = 0;
-        boolean firstFrame = true;
+        previousDisposal = 0;
+        firstFrame = true;
 
-        int gceDisposal = 0;
-        int gceTransparent = -1;
-        int gceDelayMs = 0;
+        gceDisposal = 0;
+        gceTransparent = -1;
+        gceDelayMs = 0;
+
+        headerInitialized = true;
+        streamEnded = false;
+        nextFrameIndex = 0;
+        lastFrameDelayMs = 0;
+    }
+
+    private GifFrame decodeNextFrameInternal() {
+        if (streamEnded) {
+            return null;
+        }
 
         while (pos < buffer.limit()) {
             int tag = readU8();
 
             if (tag == EXT_IMAGE) {
                 ImageBlock image = readImageBlock();
-
-                if (!firstFrame) {
-                    int dispose = previousDisposal;
-                    if (dispose == 3 && prevPrevFrame == null) {
-                        dispose = 2;
-                    }
-
-                    if (dispose == 3) {
-                        for (int i = 0; i < pixelCount; i++) {
-                            if (history[i] != 0) {
-                                int p = i * 4;
-                                canvas[p] = prevPrevFrame[p];
-                                canvas[p + 1] = prevPrevFrame[p + 1];
-                                canvas[p + 2] = prevPrevFrame[p + 2];
-                                canvas[p + 3] = prevPrevFrame[p + 3];
-                            }
-                        }
-                    } else if (dispose == 2) {
-                        for (int i = 0; i < pixelCount; i++) {
-                            if (history[i] != 0) {
-                                int p = i * 4;
-                                canvas[p] = background[p];
-                                canvas[p + 1] = background[p + 1];
-                                canvas[p + 2] = background[p + 2];
-                                canvas[p + 3] = background[p + 3];
-                            }
-                        }
-                    }
-                }
+                applyDisposalFromPreviousFrame();
 
                 System.arraycopy(canvas, 0, background, 0, background.length);
                 Arrays.fill(history, (byte) 0);
@@ -302,11 +335,12 @@ public class GifDecoder implements StbDecoder {
                 drawLzwImage(image, colorTable, gceTransparent, canvas, history);
 
                 if (fillFirstFrameBackground && firstFrame && backgroundColorIndex > 0
-                        && globalColorTable.length >= (backgroundColorIndex + 1) * 3) {
+                    && globalColorTable.length >= (backgroundColorIndex + 1) * 3) {
                     int bp = backgroundColorIndex * 3;
                     byte br = globalColorTable[bp + 2];
                     byte bg = globalColorTable[bp + 1];
                     byte bb = globalColorTable[bp];
+                    int pixelCount = StbLimits.checkedPixelCount(width, height);
                     for (int i = 0; i < pixelCount; i++) {
                         if (history[i] == 0) {
                             int p = i * 4;
@@ -319,13 +353,26 @@ public class GifDecoder implements StbDecoder {
                 }
 
                 byte[] frameCopy = canvas.clone();
-                frames.add(new GifFrame(frameCopy, gceDelayMs));
+                ByteBuffer rgbaData = allocator.apply(frameCopy.length);
+                for (int i = 0; i < frameCopy.length; i++) {
+                    rgbaData.put(i, frameCopy[i]);
+                }
+                rgbaData.limit(frameCopy.length);
+                if (flipVertically) {
+                    rgbaData = StbUtils.verticalFlip(getAllocator(), rgbaData, width, height, 4, false);
+                }
+                StbImageResult rgbaResult = new StbImageResult(rgbaData, width, height, 4, 4, false, false);
+                GifFrame frame = new GifFrame(rgbaResult, gceDelayMs);
 
                 prevPrevFrame = prevFrame;
                 prevFrame = frameCopy;
                 previousDisposal = gceDisposal;
                 firstFrame = false;
-            } else if (tag == EXT_INTRODUCER) {
+
+                return frame;
+            }
+
+            if (tag == EXT_INTRODUCER) {
                 int ext = readU8();
                 if (ext == EXT_GRAPHICS_CONTROL) {
                     int[] gce = readGraphicsControlBlock();
@@ -335,15 +382,52 @@ public class GifDecoder implements StbDecoder {
                 } else {
                     skipSubBlocks();
                 }
-            } else if (tag == TRAILER) {
-                break;
-            } else {
-                throw new StbFailureException("Corrupt GIF stream");
+                continue;
             }
+
+            if (tag == TRAILER) {
+                streamEnded = true;
+                return null;
+            }
+
+            throw new StbFailureException("Corrupt GIF stream");
         }
 
-        if (frames.isEmpty()) {
-            throw new StbFailureException("No image data found");
+        streamEnded = true;
+        return null;
+    }
+
+    private void applyDisposalFromPreviousFrame() {
+        if (firstFrame) {
+            return;
+        }
+
+        int pixelCount = StbLimits.checkedPixelCount(width, height);
+        int dispose = previousDisposal;
+        if (dispose == 3 && prevPrevFrame == null) {
+            dispose = 2;
+        }
+
+        if (dispose == 3) {
+            for (int i = 0; i < pixelCount; i++) {
+                if (history[i] != 0) {
+                    int p = i * 4;
+                    canvas[p] = prevPrevFrame[p];
+                    canvas[p + 1] = prevPrevFrame[p + 1];
+                    canvas[p + 2] = prevPrevFrame[p + 2];
+                    canvas[p + 3] = prevPrevFrame[p + 3];
+                }
+            }
+        } else if (dispose == 2) {
+            for (int i = 0; i < pixelCount; i++) {
+                if (history[i] != 0) {
+                    int p = i * 4;
+                    canvas[p] = background[p];
+                    canvas[p + 1] = background[p + 1];
+                    canvas[p + 2] = background[p + 2];
+                    canvas[p + 3] = background[p + 3];
+                }
+            }
         }
     }
 
@@ -351,7 +435,6 @@ public class GifDecoder implements StbDecoder {
         int blockSize = readU8();
         if (blockSize != 4) {
             pos += Math.max(0, blockSize);
-            // consume terminator if present
             if (pos < buffer.limit()) {
                 int term = readU8();
                 if (term != 0) {
@@ -367,7 +450,7 @@ public class GifDecoder implements StbDecoder {
         int packed = readU8();
         int delayTime = readU16LE();
         int transparentColorIndex = readU8();
-        readU8(); // terminator
+        readU8();
 
         int disposal = (packed >> 2) & 0x7;
         boolean hasTransparency = (packed & 0x1) != 0;
@@ -562,22 +645,34 @@ public class GifDecoder implements StbDecoder {
         return out;
     }
 
-    private StbImageResult toResult(byte[] rgba, int desiredChannels) {
+    private StbImageResult toResult(GifFrame frame, int frameIndex, int desiredChannels) {
         int outChannels = desiredChannels == 0 ? 4 : desiredChannels;
+        StbImageResult cached = (outChannels == 4) ? frame.rgba : frame.variants.get(outChannels);
 
-        ByteBuffer src = allocator.apply(rgba.length);
-        for (int i = 0; i < rgba.length; i++) {
-            src.put(i, rgba[i]);
-        }
-        src.limit(rgba.length);
-
-        ByteBuffer result = StbUtils.convertChannels(getAllocator(), src, 4, width, height, outChannels, false);
-
-        if (flipVertically) {
-            result = StbUtils.verticalFlip(getAllocator(), result, width, height, outChannels, false);
+        if (cached == null) {
+            ByteBuffer converted = StbUtils.convertChannels(getAllocator(), frame.rgba.getData(), 4, width, height, outChannels, false);
+            cached = new StbImageResult(converted, width, height, outChannels, outChannels, false, false);
+            frame.variants.put(outChannels, cached);
         }
 
-        return new StbImageResult(result, width, height, outChannels, desiredChannels, false, false);
+        return duplicateResultWithDesired(cached, desiredChannels, frameIndex);
+    }
+
+    private StbImageResult duplicateResultWithDesired(StbImageResult source, int desiredChannels, int frameIndex) {
+        ByteBuffer sourceData = source.getData();
+        ByteBuffer data = sourceData.duplicate();
+        data.position(0);
+        data.limit(sourceData.limit());
+        return new StbImageResult(
+            data,
+            source.getWidth(),
+            source.getHeight(),
+            source.getChannels(),
+            desiredChannels,
+            source.is16Bit(),
+            source.isHdr(),
+            frameIndex
+        );
     }
 
     private int mapInterlacedY(int y, int h, boolean interlaced) {
@@ -594,6 +689,80 @@ public class GifDecoder implements StbDecoder {
             }
         }
         return y;
+    }
+
+    private int scanFrameCount() {
+        ByteBuffer b = buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        int[] p = {0};
+
+        String signature = readStringAt(b, p, 6, "GIF header truncated");
+        if (!GIF87_SIGNATURE.equals(signature) && !GIF89_SIGNATURE.equals(signature)) {
+            throw new StbFailureException("Not a GIF file");
+        }
+
+        int w = readU16LEAt(b, p, "GIF data truncated");
+        int h = readU16LEAt(b, p, "GIF data truncated");
+        StbLimits.validateDimensions(w, h);
+
+        int packed = readU8At(b, p, "GIF data truncated");
+        boolean hasGct = (packed & 0x80) != 0;
+        int gctSize = 1 << ((packed & 0x7) + 1);
+        readU8At(b, p, "GIF data truncated");
+        readU8At(b, p, "GIF data truncated");
+
+        if (hasGct) {
+            ensureAvailableAt(b, p, gctSize * 3, "GIF global color table truncated");
+            p[0] += gctSize * 3;
+        }
+
+        int count = 0;
+        while (p[0] < b.limit()) {
+            int tag = readU8At(b, p, "GIF data truncated");
+            if (tag == TRAILER) {
+                break;
+            }
+            if (tag == EXT_INTRODUCER) {
+                readU8At(b, p, "GIF extension truncated");
+                skipSubBlocksAt(b, p);
+                continue;
+            }
+            if (tag != EXT_IMAGE) {
+                throw new StbFailureException("Corrupt GIF stream");
+            }
+
+            count++;
+            int left = readU16LEAt(b, p, "GIF image descriptor truncated");
+            int top = readU16LEAt(b, p, "GIF image descriptor truncated");
+            int iw = readU16LEAt(b, p, "GIF image descriptor truncated");
+            int ih = readU16LEAt(b, p, "GIF image descriptor truncated");
+            if (iw <= 0 || ih <= 0 || left < 0 || top < 0 || left + iw > w || top + ih > h) {
+                throw new StbFailureException("Bad GIF image descriptor");
+            }
+
+            int imagePacked = readU8At(b, p, "GIF image descriptor truncated");
+            boolean hasLct = (imagePacked & 0x80) != 0;
+            int lctSize = 1 << ((imagePacked & 0x7) + 1);
+            if (hasLct) {
+                ensureAvailableAt(b, p, lctSize * 3, "GIF local color table truncated");
+                p[0] += lctSize * 3;
+            }
+
+            readU8At(b, p, "GIF LZW minimum code size missing");
+            skipSubBlocksAt(b, p);
+        }
+
+        return count;
+    }
+
+    private static void skipSubBlocksAt(ByteBuffer b, int[] p) {
+        while (true) {
+            int blockSize = readU8At(b, p, "GIF sub-block truncated");
+            if (blockSize == 0) {
+                return;
+            }
+            ensureAvailableAt(b, p, blockSize, "GIF sub-block truncated");
+            p[0] += blockSize;
+        }
     }
 
     private String readString(int length) {
@@ -615,6 +784,32 @@ public class GifDecoder implements StbDecoder {
         int b0 = buffer.get(pos++) & 0xFF;
         int b1 = buffer.get(pos++) & 0xFF;
         return b0 | (b1 << 8);
+    }
+
+    private static int readU8At(ByteBuffer b, int[] p, String message) {
+        ensureAvailableAt(b, p, 1, message);
+        return b.get(p[0]++) & 0xFF;
+    }
+
+    private static int readU16LEAt(ByteBuffer b, int[] p, String message) {
+        int b0 = readU8At(b, p, message);
+        int b1 = readU8At(b, p, message);
+        return b0 | (b1 << 8);
+    }
+
+    private static String readStringAt(ByteBuffer b, int[] p, int length, String message) {
+        ensureAvailableAt(b, p, length, message);
+        StringBuilder sb = new StringBuilder(length);
+        for (int i = 0; i < length; i++) {
+            sb.append((char) (b.get(p[0]++) & 0xFF));
+        }
+        return sb.toString();
+    }
+
+    private static void ensureAvailableAt(ByteBuffer b, int[] p, int n, String message) {
+        if (n < 0 || p[0] + n > b.limit()) {
+            throw new StbFailureException(message);
+        }
     }
 
     private void ensureAvailable(int n, String message) {

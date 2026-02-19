@@ -1,12 +1,11 @@
 package org.ngengine.stbimage;
 
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -52,12 +51,14 @@ class GifAnimationTest {
         assertNotNull(frame0);
         assertTrue(decoder.isAnimated());
         assertTrue(decoder.getFrameCount() > 1);
+        assertEquals(0, frame0.getFrameIndex());
 
         StbImageResult frame1 = decoder.loadNextFrame(4);
         assertNotNull(frame1);
         assertEquals(frame0.getWidth(), frame1.getWidth());
         assertEquals(frame0.getHeight(), frame1.getHeight());
         assertEquals(4, frame1.getChannels());
+        assertEquals(1, frame1.getFrameIndex());
 
         ByteBuffer f0 = frame0.getData();
         ByteBuffer f1 = frame1.getData();
@@ -74,6 +75,8 @@ class GifAnimationTest {
             assertNotNull(f);
             assertEquals(frame0.getWidth(), f.getWidth());
             assertEquals(frame0.getHeight(), f.getHeight());
+            assertTrue(f.getFrameIndex() >= 0);
+            assertTrue(f.getFrameIndex() < decoder.getFrameCount());
         }
     }
 
@@ -96,5 +99,33 @@ class GifAnimationTest {
             int diff = Math.abs(decoded - expected[offset + i]);
             assertTrue(diff <= 3, "First frame mismatch at byte " + i + ": decoded=" + decoded + ", expected=" + expected[offset + i]);
         }
+    }
+
+    @Test
+    void testLoadAllFramesMatchesStreamingFrameCount() throws IOException {
+        StbImage stb = new StbImage();
+        GifDecoder decoder = (GifDecoder) stb.getDecoder(loadResource("testData/image/animated.gif"), false);
+
+        int expectedCount = decoder.getFrameCount();
+        List<StbImageResult> all = decoder.loadAllFrames(4);
+
+        assertEquals(expectedCount, all.size());
+        assertFalse(all.isEmpty());
+        for (StbImageResult frame : all) {
+            assertEquals(4, frame.getChannels());
+            assertEquals(all.get(0).getWidth(), frame.getWidth());
+            assertEquals(all.get(0).getHeight(), frame.getHeight());
+        }
+    }
+
+    @Test
+    void testGifInfoContainsFrameCount() throws IOException {
+        StbImage stb = new StbImage();
+        GifDecoder decoder = (GifDecoder) stb.getDecoder(loadResource("testData/image/animated.gif"), false);
+        StbImageInfo info = decoder.info();
+
+        assertNotNull(info);
+        assertEquals(decoder.getFrameCount(), info.getNumFrames());
+        assertTrue(info.getNumFrames() > 1);
     }
 }
