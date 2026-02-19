@@ -1,13 +1,19 @@
 # StbImage for Java (NGE port)
 
 This repository contains an experimental, pure-Java (Java 11+) port/fork of `stb_image.h`.
+**This is not a binding or wrapper: the implementation is entirely Java and does not call native code (no JNI).**
 
-* This is not a binding or wrapper: the implementation is entirely Java and does not call native code (no JNI).
-* The goal is to provide a `stb_image`-like decoder for environments where native bindings are not available or not desirable.
+This project is best suited for:
+
+* sandboxed environments (e.g., restricted runtimes)
+* platforms without native/JNI support
+* projects that prefer "pure Java" dependencies for cross-platform compatibility, ease of use or peace of mind
+* projects that load untrusted files and want to avoid native attack surfaces
+
+> [!NOTE]
+> The initial codebase was produced with AI-assisted translation, then reviewed, patched and improved by humans.
 
 ## Project status and reliability
-
-Much of the codebase was initially produced with AI-assisted translation, then reviewed, patched and improved by humans. 
 
 The implementation is:
 
@@ -17,27 +23,31 @@ The implementation is:
 - and it intentionally does not perform any filesystem access
 
 In practice, it should be safe to use even to load untrusted files.
-By default the library uses `ByteBuffer.allocate` as the allocator. You can pass a custom allocator, but it must manage the buffers' lifecycle and release resources appropriately (for example, ensure direct buffers are reclaimed).
 
-That said, this is still an **experimental** project. For maximum stability, performance, and long-term compatibility, using the [LWJGL3 native bindings](https://www.lwjgl.org/) to the original C library is still recommended when possible.
 
-This project is best suited for:
+> [!WARNING]
+> This is still an **experimental** project. For maximum stability, performance, and long-term compatibility, using the [LWJGL3 native bindings](https://www.lwjgl.org/) to the original C library is still recommended when possible.
 
-* sandboxed environments (e.g., restricted runtimes)
-* platforms without native/JNI support
-* projects that prefer "pure Java" dependencies for cross-platform compatibility, ease of use or peace of mind
-* projects that load untrusted files and want to avoid native attack surfaces
+Two machine generated parity reports are included: 
+- [FEATURE_PARITY.md](FEATURE_PARITY.md) 
+- [FEATURE_PARITY_STB_SECTIONS.md](FEATURE_PARITY_STB_SECTIONS.md)
+
+
 
 ## API notes and divergences
 
 This is not a strict 1:1 port. Some APIs were adapted to be more Java-idiomatic and to integrate better with game engines (the original target of this port). In a few places, convenience was traded for consistency and safer public APIs.
+
+The library uses `ByteBuffer.allocate` by default, but any allocator can be wired through the StbImage constructor.
+
+> [!IMPORTANT]
+> The allocator must internally manage buffer lifecycle and release resources appropriately (for example, ensure direct buffers are reclaimed).
 
 ## Namespace note
 
 The Java package namespace was intentionally changed to avoid collisions with other stb_image implementations.
 
 Current package: `org.ngengine.stbimage`
-
 
 
 ## Basic usage
@@ -87,12 +97,7 @@ Then run the tests with
 [ImageViewer.java](stb-image-decoder/src/test/java/org/ngengine/stbimage/ImageViewer.java) is a simple Swing-based image viewer that you can launch from vscode to manually test decoding of various images by dragging and dropping them onto the window.
 
 
-## Parity Reports
-
-Two machine generated parity reports are included: 
-- [FEATURE_PARITY.md](FEATURE_PARITY.md) 
-- [FEATURE_PARITY_STB_SECTIONS.md](FEATURE_PARITY_STB_SECTIONS.md)
-
+ 
 
 ## License 
 
