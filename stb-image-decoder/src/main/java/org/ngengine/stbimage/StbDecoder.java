@@ -69,11 +69,10 @@ public interface StbDecoder {
     /**
      * Loads image data as floating-point output for HDR-capable decoders.
      *
-     * @param buffer source buffer (not used by all implementations)
      * @param desiredChannels requested output channels (0 keeps source/default behavior)
      * @return decoded floating-point result
      */
-    public default StbImageResult loadf(ByteBuffer buffer, int desiredChannels) {
+    public default StbImageResult loadf(int desiredChannels) {
         // HDR files
         if (!(this instanceof HdrDecoder)) {
             throw new StbFailureException("Not an HDR image");
