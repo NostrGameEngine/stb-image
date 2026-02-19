@@ -266,12 +266,20 @@ public class StbImageApiTest {
 
     @Test
     void testLoadf() {
-        // HDR not implemented
-        byte[] data = new byte[] { 1, 2 };
-        assertThrows(StbFailureException.class, () ->{
+        assertThrows(StbFailureException.class, () -> {
             StbImage stb = new StbImage();
-            stb.getDecoder(ByteBuffer.wrap(data), false).load16(0);
+            StbDecoder decoder = stb.getDecoder(ByteBuffer.wrap(loadResourceBytes("testData/image/single.gif")), false);
+            decoder.loadf(0);
         });
+    }
+
+    @Test
+    void testLoadfHdr() throws IOException {
+        StbImage stb = new StbImage();
+        StbDecoder decoder = stb.getDecoder(ByteBuffer.wrap(loadResourceBytes("testData/image/rgbe_rle.hdr")), false);
+        StbImageResult result = decoder.loadf(3);
+        assertTrue(result.isHdr());
+        assertEquals(3, result.getChannels());
     }
 
     @Test

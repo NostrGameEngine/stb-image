@@ -47,6 +47,12 @@ public interface StbDecoder {
         }
 
         StbImageResult result = load(desiredChannels);
+        
+        // prevent accidental misuse on HDR decoders since load16 doesn't make sense for them
+        if (result.isHdr()) {
+            throw new StbFailureException("Cannot load16 from HDR data; use loadf instead");
+        }
+
         // If already 16-bit, return as-is, otherwise convert
         if (result.is16Bit()) {
             return result;
@@ -73,12 +79,13 @@ public interface StbDecoder {
      * @return decoded floating-point result
      */
     public default StbImageResult loadf(int desiredChannels) {
-        // HDR files
         if (!(this instanceof HdrDecoder)) {
-            throw new StbFailureException("Not an HDR image");
+            throw new StbFailureException("cannot loadf from non-HDR images, use load or load16 instead");
         }
-
-        return  load(desiredChannels);
+        StbImageResult result = load(desiredChannels);
+        if (!result.isHdr()) {
+            throw new StbFailureException("Decoder did not return HDR float data");
+        }
+        return result;
     }
-
 }
