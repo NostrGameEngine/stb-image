@@ -1,7 +1,6 @@
 # StbImage for Java (NGE port)
 
-This repository contains an experimental, pure-Java (Java 11+) port/fork of `stb_image.h`.
-**This is not a binding or wrapper: the implementation is entirely Java and does not call native code (no JNI).**
+**This is not a binding or wrapper: this repository contains an experimental, pure-Java (Java 11+) port/fork of `stb_image.h`**
 
 This project is best suited for:
 
@@ -43,11 +42,7 @@ The library uses `ByteBuffer.allocate` by default, but any allocator can be wire
 > [!IMPORTANT]
 > The allocator must internally manage buffer lifecycle and release resources appropriately (for example, ensure direct buffers are reclaimed).
 
-## Namespace note
-
-The Java package namespace was intentionally changed to avoid collisions with other stb_image implementations.
-
-Current package: `org.ngengine.stbimage`
+ 
 
 
 ## Basic usage
@@ -71,6 +66,9 @@ try {
     System.err.println("File not supported!");
 }
 ```
+
+> [!NOTE]
+> The Java package namespace was intentionally changed to `org.ngengine.stbimage`, in order to avoid collisions with other stb_image implementations.
 
 ## Unit tests and parity checks
 
