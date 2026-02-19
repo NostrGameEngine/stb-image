@@ -1,12 +1,13 @@
-package com.stb.image;
+package org.ngengine.stbimage;
 
-import com.stb.image.allocator.StbAllocator;
 import java.nio.ByteBuffer;
+import java.util.function.IntFunction;
+
 
 /**
  * PSD decoder for composite image, 8/16-bit.
  */
-public class PsdDecoder {
+public class PsdDecoder implements StbDecoder{
 
     // PSD signature "8BPS"
     private static final int PSD_SIGNATURE = 0x38425053;
@@ -23,7 +24,7 @@ public class PsdDecoder {
 
     private ByteBuffer buffer;
     private int pos;
-    private StbAllocator allocator;
+    private IntFunction<ByteBuffer> allocator;
     private boolean flipVertically;
 
     private int width;
@@ -33,36 +34,30 @@ public class PsdDecoder {
     private int colorMode;
     private int colorDepth;
 
-    public static StbImageInfo getInfo(ByteBuffer buffer) {
-        return getInfo(buffer, StbAllocator.DEFAULT);
+
+    public static boolean isPsd(ByteBuffer buffer) {
+        if (buffer.remaining() < 12) return false;
+        buffer=buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
+        int sig = buffer.getInt();
+        int version = buffer.getShort() & 0xFFFF;
+        return sig == 0x38425053 && (version == 1 || version == 2);
     }
 
-    public static StbImageInfo getInfo(ByteBuffer buffer, StbAllocator allocator) {
-        PsdDecoder decoder = new PsdDecoder(buffer.duplicate(), allocator, false);
-        return decoder.decodeInfo();
+ 
+    @Override
+    public IntFunction<ByteBuffer> getAllocator() {
+        return allocator;
     }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels) {
-        return decode(buffer, desiredChannels, StbAllocator.DEFAULT, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator) {
-        return decode(buffer, desiredChannels, allocator, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator, boolean flipVertically) {
-        PsdDecoder decoder = new PsdDecoder(buffer, allocator, flipVertically);
-        return decoder.decode(desiredChannels);
-    }
-
-    public PsdDecoder(ByteBuffer buffer, StbAllocator allocator, boolean flipVertically) {
+    
+    public PsdDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
-        this.allocator = allocator != null ? allocator : StbAllocator.DEFAULT;
+        this.allocator = allocator;
         this.flipVertically = flipVertically;
         this.pos = 0;
     }
 
-    private StbImageInfo decodeInfo() {
+    @Override
+    public StbImageInfo info() {
         try {
             // Read signature
             if (readU32BE() != PSD_SIGNATURE) {
@@ -94,7 +89,8 @@ public class PsdDecoder {
         }
     }
 
-    private StbImageResult decode(int desiredChannels) {
+    @Override
+    public StbImageResult load(int desiredChannels) {
         // Read signature
         if (readU32BE() != PSD_SIGNATURE) {
             throw new StbFailureException("Not a PSD file");
@@ -151,7 +147,7 @@ public class PsdDecoder {
         int bytesPerChannel = is16Bit ? 2 : 1;
 
         // Allocate output buffer
-        ByteBuffer output = allocator.allocate(width * height * outChannels * bytesPerChannel);
+        ByteBuffer output = allocator.apply(width * height * outChannels * bytesPerChannel);
 
         // Read image data
         // Compression: 0 = raw, 1 = RLE
@@ -169,7 +165,7 @@ public class PsdDecoder {
         output.limit(width * height * outChannels * bytesPerChannel);
 
         if (flipVertically) {
-            output = StbImage.verticalFlip(output, width, height, outChannels, is16Bit);
+            output = StbImage.verticalFlip(getAllocator(),output, width, height, outChannels, is16Bit);
         }
 
         return new StbImageResult(output, width, height, outChannels, desiredChannels, is16Bit, false);

@@ -1,6 +1,5 @@
-package com.stb.image;
+package org.ngengine.stbimage;
 
-import com.stb.image.allocator.StbAllocator;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
@@ -26,53 +25,10 @@ public class StbImageApiTest {
         assertEquals(1 << 24, StbImage.STBI_MAX_DIMENSIONS);
     }
 
-    @Test
-    void testDefaultAllocator() {
-        StbAllocator alloc = StbImage.getAllocator();
-        assertNotNull(alloc);
-
-        ByteBuffer buf = alloc.allocate(100);
-        assertNotNull(buf);
-        assertEquals(100, buf.capacity());
-    }
-
-    @Test
-    void testSetCustomAllocator() {
-        StbAllocator customAlloc = size -> {
-            if (size <= 0) throw new IllegalArgumentException();
-            return ByteBuffer.allocateDirect(size);
-        };
-
-        StbImage.setAllocator(customAlloc);
-        assertSame(customAlloc, StbImage.getAllocator());
-
-        // Reset to default
-        StbImage.setAllocator(StbAllocator.DEFAULT);
-    }
-
-    @Test
-    void testFlipVertically() {
-        StbImage.setFlipVertically(true);
-        assertTrue(StbImage.isFlipVertically());
-
-        StbImage.setFlipVertically(false);
-        assertFalse(StbImage.isFlipVertically());
-    }
-
-    @Test
-    void testReadHelpers() {
-        // Test readU8
-        ByteBuffer buf = ByteBuffer.wrap(new byte[] { (byte)0xFF, 0x00, 0x7F });
-        assertEquals(255, StbImage.readU8(buf));
-        assertEquals(0, StbImage.readU8(buf));
-        assertEquals(127, StbImage.readU8(buf));
-    }
-
-    @Test
-    void testReadString() {
-        ByteBuffer buf = ByteBuffer.wrap(new byte[] { 'H', 'e', 'l', 'l', 'o', 0, 'W', 'o', 'r', 'l', 'd' });
-        assertEquals("Hello", StbImage.readString(buf, 10));
-    }
+ 
+  
+    
+    
 
     @Test
     void testValidateDimensions() {
@@ -100,7 +56,7 @@ public class StbImageApiTest {
         src.flip();
 
         // Should not throw
-        assertDoesNotThrow(() -> StbImage.verticalFlip(src, 2, 2, 1, false));
+        assertDoesNotThrow(() -> StbImage.verticalFlip(ByteBuffer::allocate, src, 2, 2, 1, false));
     }
 
     @Test
@@ -108,7 +64,7 @@ public class StbImageApiTest {
         // 3 channels to 3 channels - should return same data
         ByteBuffer src = ByteBuffer.wrap(new byte[] { 1, 2, 3, 4, 5, 6 });
 
-        ByteBuffer result = StbImage.convertChannels(src, 3, 2, 1, 3, false);
+        ByteBuffer result = StbImage.convertChannels(ByteBuffer::allocate, src, 3, 2, 1, 3, false);
 
         assertNotNull(result);
     }
@@ -117,22 +73,28 @@ public class StbImageApiTest {
     void testInfoWithInvalidData() {
         // Empty buffer should return null
         ByteBuffer empty = ByteBuffer.wrap(new byte[0]);
-        assertNull(StbImage.info(empty));
+        StbImage stb = new StbImage();
+        
+        assertThrows(StbFailureException.class,()->{
+            stb.getDecoder(empty, false).info();
+        });
 
         // Random data should return null (not a known format)
         ByteBuffer random = ByteBuffer.wrap(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 });
-        assertNull(StbImage.info(random));
+        assertThrows(StbFailureException.class,()->{
+            stb.getDecoder(random, false).info();
+        });
     }
 
     @Test
     void testIsHdrWithInvalidData() {
         // Not HDR signature
         ByteBuffer buf = ByteBuffer.wrap(new byte[] { 1, 2, 3, 4 });
-        assertFalse(StbImage.isHdr(buf));
+        assertFalse(HdrDecoder.isHdr(buf));
 
         // Too small
         ByteBuffer small = ByteBuffer.wrap(new byte[] { 1 });
-        assertFalse(StbImage.isHdr(small));
+        assertFalse(HdrDecoder.isHdr(small));
     }
 
     @Test
@@ -141,7 +103,8 @@ public class StbImageApiTest {
         byte[] invalid = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 };
 
         assertThrows(StbFailureException.class, () -> {
-            StbImage.load(invalid, 0);
+            StbImage stb = new StbImage();
+            stb.getDecoder(ByteBuffer.wrap(invalid), false).load(0);
         });
     }
 
@@ -149,14 +112,20 @@ public class StbImageApiTest {
     void testLoad16() {
         // Should just call load for now
         byte[] data = new byte[] { 1, 2 };
-        assertThrows(StbFailureException.class, () -> StbImage.load16(data, 0));
+        assertThrows(StbFailureException.class, () -> {
+            StbImage stb = new StbImage();
+            stb.getDecoder(ByteBuffer.wrap(data), false).load16(0);
+        });
     }
 
     @Test
     void testLoadf() {
         // HDR not implemented
         byte[] data = new byte[] { 1, 2 };
-        assertThrows(StbFailureException.class, () -> StbImage.loadf(data, 0));
+        assertThrows(StbFailureException.class, () ->{
+            StbImage stb = new StbImage();
+            stb.getDecoder(ByteBuffer.wrap(data), false).load16(0);
+        });
     }
 
     @Test

@@ -1,54 +1,61 @@
-package com.stb.image;
+package org.ngengine.stbimage;
 
-import com.stb.image.allocator.StbAllocator;
 import java.nio.ByteBuffer;
+import java.util.function.IntFunction;
+
 
 /**
  * Radiance HDR decoder, RGBE to RGB float conversion.
  */
-public class HdrDecoder {
+public class HdrDecoder implements StbDecoder {
 
     private static final String HDR_SIGNATURE = "#?RADIANCE";
     private static final String HDR_SIGNATURE_ALT = "#?RGBE";
 
     private ByteBuffer buffer;
     private int pos;
-    private StbAllocator allocator;
+    private IntFunction<ByteBuffer> allocator;
     private boolean flipVertically;
 
     private int width;
     private int height;
 
-    public static StbImageInfo getInfo(ByteBuffer buffer) {
-        return getInfo(buffer, StbAllocator.DEFAULT);
+
+    public static boolean isHdr(ByteBuffer buffer) {
+        if (buffer.remaining() < 11) return false;
+        buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
+        // Skip whitespace
+        while (buffer.hasRemaining()) {
+            char c = (char) (buffer.get() & 0xFF);
+            if (!Character.isWhitespace(c)) {
+                buffer.position(buffer.position() - 1);
+                break;
+            }
+        }
+        // Check for #?RADIANCE or #?RGBE
+        byte[] sig = new byte[10];
+        buffer.get(sig);
+        for(int i=0;i<sig.length;i++) {
+            System.out.printf("%02X ", sig[i]);
+
+        }
+        return (sig[0] == '#' && sig[1] == '?') &&
+                ((sig[2] == 'R' && sig[3] == 'A' && sig[4] == 'D' && sig[5] == 'I') ||
+                (sig[2] == 'R' && sig[3] == 'G' && sig[4] == 'B' && sig[5] == 'E'));
+       
     }
 
-    public static StbImageInfo getInfo(ByteBuffer buffer, StbAllocator allocator) {
-        HdrDecoder decoder = new HdrDecoder(buffer.duplicate(), allocator, false);
-        return decoder.decodeInfo();
-    }
 
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels) {
-        return decode(buffer, desiredChannels, StbAllocator.DEFAULT, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator) {
-        return decode(buffer, desiredChannels, allocator, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator, boolean flipVertically) {
-        HdrDecoder decoder = new HdrDecoder(buffer, allocator, flipVertically);
-        return decoder.decode(desiredChannels);
-    }
-
-    public HdrDecoder(ByteBuffer buffer, StbAllocator allocator, boolean flipVertically) {
-        this.buffer = buffer.duplicate();
-        this.allocator = allocator != null ? allocator : StbAllocator.DEFAULT;
+     
+    public HdrDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
+        this.buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
+        this.allocator = allocator;
         this.flipVertically = flipVertically;
         this.pos = 0;
     }
 
-    private StbImageInfo decodeInfo() {
+    @Override
+    public StbImageInfo info() {
         try {
             // Skip any initial whitespace
             skipWhitespace();
@@ -105,7 +112,12 @@ public class HdrDecoder {
         }
     }
 
-    private StbImageResult decode(int desiredChannels) {
+    @Override
+    public IntFunction<ByteBuffer> getAllocator() {
+        return allocator;
+    }
+    @Override
+    public StbImageResult load(int desiredChannels) {
         // Read header
         readHeader();
 
@@ -113,7 +125,7 @@ public class HdrDecoder {
 
         // Allocate output buffer (3 channels float = 4 bytes each)
         int outChannels = (desiredChannels == 0 || desiredChannels == 4) ? 3 : desiredChannels;
-        ByteBuffer output = allocator.allocate(width * height * outChannels * 4);
+        ByteBuffer output = allocator.apply(width * height * outChannels * 4);
 
         // Check for new RLE format
         boolean isRle = false;
@@ -149,7 +161,7 @@ public class HdrDecoder {
         output.flip();
 
         if (flipVertically) {
-            output = StbImage.verticalFlip(output, width, height, outChannels, true);
+            output = StbImage.verticalFlip(getAllocator(),output, width, height, outChannels, true);
         }
 
         return new StbImageResult(output, width, height, outChannels, desiredChannels, false, true);

@@ -1,6 +1,5 @@
-package com.stb.image;
+package org.ngengine.stbimage;
 
-import com.stb.image.allocator.StbAllocator;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -30,12 +29,12 @@ public class StbImagePixelTest {
 
     /** List of image paths from index.txt */
     private static final List<String> imagePaths = new ArrayList<>();
+    private static StbImage stbImage;
 
     @BeforeAll
     static void setUp() throws IOException {
-        StbImage.setAllocator(StbAllocator.DEFAULT);
-        StbImage.setFlipVertically(false);
-
+        stbImage = new StbImage();
+        
         // Load index.txt to get list of images
         loadImageIndex();
     }
@@ -157,7 +156,7 @@ public class StbImagePixelTest {
 
             try {
                 ByteBuffer image = loadResource(classpathPath);
-                StbImageResult result = StbImage.load(image, 4);
+                StbImageResult result = stbImage.getDecoder(image,false).load(4);
 
                 assertNotNull(result, "Failed to load: " + filename);
                 assertTrue(result.getWidth() > 0, "Invalid width for: " + filename);
@@ -225,7 +224,7 @@ public class StbImagePixelTest {
 
                 // Load image - always request 4 channels to match reference generation
                 ByteBuffer image = loadResource(classpathPath);
-                StbImageResult result = StbImage.load(image, 4);
+                StbImageResult result = stbImage.getDecoder(image, false).load(4);
 
                 assertNotNull(result, "Failed to load: " + filename);
 
@@ -267,7 +266,7 @@ public class StbImagePixelTest {
     @Test
     void testPngDetection() throws IOException {
         ByteBuffer image = loadResource("testData/image/rgba8.png");
-        StbImageInfo info = StbImage.info(image);
+        StbImageInfo info = stbImage.getDecoder(image, false).info();
         assertNotNull(info);
         assertEquals(StbImageInfo.ImageFormat.PNG, info.getFormat());
     }
@@ -275,7 +274,7 @@ public class StbImagePixelTest {
     @Test
     void testBmpDetection() throws IOException {
         ByteBuffer image = loadResource("testData/image/rgba32.bmp");
-        StbImageInfo info = StbImage.info(image);
+        StbImageInfo info = stbImage.getDecoder(image, false).info();
         assertNotNull(info);
         assertEquals(StbImageInfo.ImageFormat.BMP, info.getFormat());
     }
@@ -283,7 +282,7 @@ public class StbImagePixelTest {
     @Test
     void testTgaDetection() throws IOException {
         ByteBuffer image = loadResource("testData/image/rgba_rle.tga");
-        StbImageInfo info = StbImage.info(image);
+        StbImageInfo info = stbImage.getDecoder(image, false).info();
         assertNotNull(info);
         assertEquals(StbImageInfo.ImageFormat.TGA, info.getFormat());
     }
@@ -291,7 +290,7 @@ public class StbImagePixelTest {
     @Test
     void testJpegDetection() throws IOException {
         ByteBuffer image = loadResource("testData/image/rgb_baseline.jpg");
-        StbImageInfo info = StbImage.info(image);
+        StbImageInfo info = stbImage.getDecoder(image, false).info();
         assertNotNull(info);
         assertEquals(StbImageInfo.ImageFormat.JPEG, info.getFormat());
     }
@@ -299,7 +298,7 @@ public class StbImagePixelTest {
     @Test
     void testPnmDetection() throws IOException {
         ByteBuffer image = loadResource("testData/image/rgb.ppm");
-        StbImageInfo info = StbImage.info(image);
+        StbImageInfo info = stbImage.getDecoder(image, false).info();
         assertNotNull(info);
         assertEquals(StbImageInfo.ImageFormat.PNM, info.getFormat());
     }
@@ -307,7 +306,7 @@ public class StbImagePixelTest {
     @Test
     void testGifDetection() throws IOException {
         ByteBuffer image = loadResource("testData/image/single.gif");
-        StbImageInfo info = StbImage.info(image);
+        StbImageInfo info = stbImage.getDecoder(image, false).info();
         assertNotNull(info);
         assertEquals(StbImageInfo.ImageFormat.GIF, info.getFormat());
     }
@@ -315,7 +314,7 @@ public class StbImagePixelTest {
     @Test
     void testPsdDetection() throws IOException {
         ByteBuffer image = loadResource("testData/image/rgb.psd");
-        StbImageInfo info = StbImage.info(image);
+        StbImageInfo info = stbImage.getDecoder(image, false).info();
         assertNotNull(info);
         assertEquals(StbImageInfo.ImageFormat.PSD, info.getFormat());
     }

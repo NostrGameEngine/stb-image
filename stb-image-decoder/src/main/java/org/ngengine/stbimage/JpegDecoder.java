@@ -1,8 +1,9 @@
-package com.stb.image;
+package org.ngengine.stbimage;
 
-import com.stb.image.allocator.StbAllocator;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.function.IntFunction;
+
 
 /**
  * JPEG decoder - baseline (sequential) and progressive DCT decoder, implemented to match stb_image.h behavior closely.
@@ -18,7 +19,7 @@ import java.nio.ByteOrder;
  * Notes:
  * - Output matches stb_image's resampling + YCbCr conversion (including the hv_2 filter).
  */
-public class JpegDecoder {
+public class JpegDecoder implements StbDecoder {
 
     private static final int DCTSIZE = 8;
     private static final int DCTSIZE2 = 64;
@@ -27,8 +28,8 @@ public class JpegDecoder {
 
     private ByteBuffer buffer;
     private int pos;
-    private final StbAllocator allocator;
-    private final boolean flipVertically;
+    private IntFunction<ByteBuffer> allocator;
+    private boolean flipVertically;
 
     private int width;
     private int height;
@@ -124,32 +125,23 @@ public class JpegDecoder {
         ResampleRowFunc func;
     }
 
-    public static StbImageInfo getInfo(ByteBuffer buffer) {
-        return getInfo(buffer, StbAllocator.DEFAULT);
+    public static boolean isJpeg(ByteBuffer buffer) {
+        if (buffer.remaining() < 2) return false;
+        buffer = buffer.duplicate().order(ByteOrder.BIG_ENDIAN);
+        int b0 = buffer.get() & 0xFF;
+        int b1 = buffer.get() & 0xFF;
+        return b0 == 0xFF && b1 == 0xD8;
     }
 
-    public static StbImageInfo getInfo(ByteBuffer buffer, StbAllocator allocator) {
-        JpegDecoder decoder = new JpegDecoder(buffer, allocator, false);
-        return decoder.decodeInfo();
+    @Override
+    public IntFunction<ByteBuffer> getAllocator() {
+        return allocator;
     }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels) {
-        return decode(buffer, desiredChannels, StbAllocator.DEFAULT, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator) {
-        return decode(buffer, desiredChannels, allocator, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator, boolean flipVertically) {
-        JpegDecoder decoder = new JpegDecoder(buffer, allocator, flipVertically);
-        return decoder.decode(desiredChannels);
-    }
-
-    public JpegDecoder(ByteBuffer src, StbAllocator allocator, boolean flipVertically) {
+    
+    public JpegDecoder(ByteBuffer src, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
         // Respect caller's position/limit by slicing
-        this.buffer = src.slice().order(ByteOrder.BIG_ENDIAN);
-        this.allocator = allocator != null ? allocator : StbAllocator.DEFAULT;
+        this.buffer = src.duplicate().order(ByteOrder.BIG_ENDIAN);
+        this.allocator = allocator ;
         this.flipVertically = flipVertically;
         this.pos = 0;
         for (int i = 0; i < imgComp.length; i++) imgComp[i] = new Component();
@@ -159,7 +151,8 @@ public class JpegDecoder {
     // Info-only parse (SOF scan)
     // ---------------------------
 
-    private StbImageInfo decodeInfo() {
+    @Override
+    public StbImageInfo info() {
         try {
             pos = 0;
             if (read8() != 0xFF || read8() != 0xD8) return null;
@@ -205,7 +198,8 @@ public class JpegDecoder {
     // Full decode
     // ---------------------------
 
-    private StbImageResult decode(int desiredChannels) {
+    @Override
+    public StbImageResult load(int desiredChannels) {
         parseHeaders(); // fills width/height/components + tables + allocates component buffers + parses SOS
 
         // stb behavior: if desiredChannels==0 => native channels. otherwise exactly desiredChannels.
@@ -235,7 +229,7 @@ public class JpegDecoder {
             res[i] = makeResample(imgComp[i]);
         }
 
-        ByteBuffer output = allocator.allocate(width * height * outChannels);
+        ByteBuffer output = allocator.apply(width * height * outChannels);
 
         // Main scanline loop
         for (int y = 0; y < height; y++) {
@@ -326,7 +320,7 @@ public class JpegDecoder {
         }
 
         if (flipVertically) {
-            output = StbImage.verticalFlip(output, width, height, outChannels, false);
+            output = StbImage.verticalFlip(getAllocator(),output, width, height, outChannels, false);
         }
 
         output.limit(width * height * outChannels);

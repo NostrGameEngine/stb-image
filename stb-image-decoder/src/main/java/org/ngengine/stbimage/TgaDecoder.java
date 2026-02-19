@@ -1,12 +1,14 @@
-package com.stb.image;
+package org.ngengine.stbimage;
 
-import com.stb.image.allocator.StbAllocator;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.function.IntFunction;
+
 
 /**
  * TGA decoder supporting uncompressed and RLE compressed, grayscale and color.
  */
-public class TgaDecoder {
+public class TgaDecoder implements StbDecoder {
 
     // TGA header field values
     private static final int TYPE_UNMAPPED_RGB = 2;
@@ -21,7 +23,7 @@ public class TgaDecoder {
     private static final int ORIGIN_TOP_LEFT = 0x20;
 
     private ByteBuffer buffer;
-    private StbAllocator allocator;
+    private IntFunction<ByteBuffer> allocator;
     private boolean flipVertically;
 
     private int width;
@@ -37,33 +39,25 @@ public class TgaDecoder {
     private int xOrigin;
     private int yOrigin;
 
-    public static StbImageInfo getInfo(ByteBuffer buffer) {
-        return getInfo(buffer, StbAllocator.DEFAULT);
+
+ 
+    @Override
+    public IntFunction<ByteBuffer> getAllocator() {
+        return allocator;
     }
 
-    public static StbImageInfo getInfo(ByteBuffer buffer, StbAllocator allocator) {
-        TgaDecoder decoder = new TgaDecoder(buffer.duplicate(), allocator, false);
-        return decoder.decodeInfo();
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels) {
-        return decode(buffer, desiredChannels, StbAllocator.DEFAULT, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator) {
-        return decode(buffer, desiredChannels, allocator, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator, boolean flipVertically) {
-        TgaDecoder decoder = new TgaDecoder(buffer, allocator, flipVertically);
-        return decoder.decode(desiredChannels);
-    }
-
-    public TgaDecoder(ByteBuffer buffer, StbAllocator allocator, boolean flipVertically) {
-        this.buffer = buffer.duplicate();
+    public TgaDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
+        this.buffer = buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
         this.buffer.position(0);
-        this.allocator = allocator != null ? allocator : StbAllocator.DEFAULT;
+        this.allocator = allocator;
         this.flipVertically = flipVertically;
+    }
+
+    public static boolean isTga(ByteBuffer src) {
+        if (src.remaining() < 18)
+            return false;
+
+        return true;
     }
 
     private int readU8() {
@@ -76,7 +70,8 @@ public class TgaDecoder {
         return b0 | (b1 << 8);
     }
 
-    private StbImageInfo decodeInfo() {
+    @Override
+    public StbImageInfo info() {
         try {
             readHeader();
 
@@ -86,7 +81,8 @@ public class TgaDecoder {
         }
     }
 
-    private StbImageResult decode(int desiredChannels) {
+    @Override
+    public StbImageResult load(int desiredChannels) {
         readHeader();
 
         StbImage.validateDimensions(width, height);
@@ -144,10 +140,10 @@ public class TgaDecoder {
         int outChannels = (desiredChannels == 0) ?
             (channels == 1 ? 1 : 3) : desiredChannels;
 
-        ByteBuffer result = StbImage.convertChannels(output, srcChannels, width, height, outChannels, false);
+        ByteBuffer result = StbImage.convertChannels(getAllocator(),output, srcChannels, width, height, outChannels, false);
 
         if (actualFlipVertically) {
-            result = StbImage.verticalFlip(result, width, height, outChannels, false);
+            result = StbImage.verticalFlip(getAllocator(),result, width, height, outChannels, false);
         }
 
         return new StbImageResult(result, width, height, outChannels, desiredChannels, false, false);
@@ -187,7 +183,7 @@ public class TgaDecoder {
     }
 
     private ByteBuffer decodeUncompressed() {
-        ByteBuffer output = allocator.allocate(width * height * channels);
+        ByteBuffer output = allocator.apply(width * height * channels);
 
         int bytesPerPixel = (bitsPerPixel + 7) / 8;
 
@@ -268,7 +264,7 @@ public class TgaDecoder {
     }
 
     private ByteBuffer decodeRLE() {
-        ByteBuffer output = allocator.allocate(width * height * channels);
+        ByteBuffer output = allocator.apply(width * height * channels);
         int pixelCount = width * height;
         int pixelIndex = 0;
         int bytesPerPixel = Math.max(1, (bitsPerPixel + 7) / 8);

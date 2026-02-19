@@ -1,14 +1,13 @@
-package com.stb.image;
+package org.ngengine.stbimage;
 
-import com.stb.image.allocator.StbAllocator;
 import java.nio.ByteBuffer;
+import java.util.function.IntFunction;
+
 
 /**
  * BMP decoder supporting 1/4/8/24/32-bit, uncompressed and RLE compressed.
  */
-public class BmpDecoder {
-
-    private static final int BMP_SIGNATURE = 0x4D42; // "BM"
+public class BmpDecoder implements StbDecoder{
 
     // Compression types
     private static final int BI_RGB = 0;
@@ -18,7 +17,7 @@ public class BmpDecoder {
 
     private ByteBuffer buffer;
     private int pos;
-    private StbAllocator allocator;
+    private IntFunction<ByteBuffer> allocator;
     private boolean flipVertically;
 
     private int width;
@@ -30,36 +29,25 @@ public class BmpDecoder {
     private byte[] palette;
     private int paletteSize;
 
-    public static StbImageInfo getInfo(ByteBuffer buffer) {
-        return getInfo(buffer, StbAllocator.DEFAULT);
+
+    public static boolean isBmp(ByteBuffer buffer) {
+        if (buffer.remaining() < 2) return false;
+        buffer = buffer.duplicate();
+        int b0 = buffer.get() & 0xFF;
+        int b1 = buffer.get() & 0xFF;
+        return b0 == 'B' && b1 == 'M';
     }
 
-    public static StbImageInfo getInfo(ByteBuffer buffer, StbAllocator allocator) {
-        BmpDecoder decoder = new BmpDecoder(buffer.duplicate(), allocator, false);
-        return decoder.decodeInfo();
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels) {
-        return decode(buffer, desiredChannels, StbAllocator.DEFAULT, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator) {
-        return decode(buffer, desiredChannels, allocator, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator, boolean flipVertically) {
-        BmpDecoder decoder = new BmpDecoder(buffer, allocator, flipVertically);
-        return decoder.decode(desiredChannels);
-    }
-
-    public BmpDecoder(ByteBuffer buffer, StbAllocator allocator, boolean flipVertically) {
+    
+    public BmpDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
         this.buffer = buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
         this.buffer.position(0);
-        this.allocator = allocator != null ? allocator : StbAllocator.DEFAULT;
+        this.allocator = allocator;
         this.flipVertically = flipVertically;
     }
 
-    private StbImageInfo decodeInfo() {
+    @Override
+    public StbImageInfo info() {
         if (!readSignature()) {
             return null;
         }
@@ -102,7 +90,13 @@ public class BmpDecoder {
         return new StbImageInfo(width, height, infoChannels, false, StbImageInfo.ImageFormat.BMP);
     }
 
-    private StbImageResult decode(int desiredChannels) {
+    @Override
+    public IntFunction<ByteBuffer> getAllocator() {
+        return allocator;
+    }
+
+    @Override
+    public StbImageResult load(int desiredChannels) {
         if (!readSignature()) {
             throw new StbFailureException("Not a BMP file");
         }
@@ -224,10 +218,10 @@ public class BmpDecoder {
             desiredChannels = (bitsPerPixel <= 8) ? 4 : channels;
         }
 
-        ByteBuffer result = StbImage.convertChannels(output, channels, width, height, desiredChannels, false);
+        ByteBuffer result = StbImage.convertChannels(getAllocator(),output, channels, width, height, desiredChannels, false);
 
         if (flipVertically) {
-            result = StbImage.verticalFlip(result, width, height, desiredChannels, false);
+            result = StbImage.verticalFlip(getAllocator(),result, width, height, desiredChannels, false);
         }
 
         return new StbImageResult(result, width, height, desiredChannels, desiredChannels, false, false);
@@ -245,7 +239,7 @@ public class BmpDecoder {
     }
 
     private ByteBuffer decodeUncompressed() {
-        ByteBuffer output = allocator.allocate(width * height * channels);
+        ByteBuffer output = allocator.apply(width * height * channels);
 
         // BMP stores rows bottom-up, start from bottom (last row in file)
         for (int y = height - 1; y >= 0; y--) {
@@ -308,7 +302,7 @@ public class BmpDecoder {
     }
 
     private ByteBuffer decodeRLE8() {
-        ByteBuffer output = allocator.allocate(width * height * channels);
+        ByteBuffer output = allocator.apply(width * height * channels);
         int x = 0, y = height - 1;
 
         while (y >= 0) {
@@ -374,7 +368,7 @@ public class BmpDecoder {
     }
 
     private ByteBuffer decodeRLE4() {
-        ByteBuffer output = allocator.allocate(width * height * channels);
+        ByteBuffer output = allocator.apply(width * height * channels);
         int x = 0, y = height - 1;
 
         while (y >= 0) {

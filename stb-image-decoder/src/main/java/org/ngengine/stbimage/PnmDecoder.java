@@ -1,12 +1,13 @@
-package com.stb.image;
+package org.ngengine.stbimage;
 
-import com.stb.image.allocator.StbAllocator;
 import java.nio.ByteBuffer;
+import java.util.function.IntFunction;
+
 
 /**
  * PNM decoder for PPM/PGM (binary), including 16-bit.
  */
-public class PnmDecoder {
+public class PnmDecoder implements StbDecoder {
 
     // PNM magic numbers
     private static final int PBM_ASCII = 'P' + ('1' << 8);
@@ -19,7 +20,7 @@ public class PnmDecoder {
 
     private ByteBuffer buffer;
     private int pos;
-    private StbAllocator allocator;
+    private IntFunction<ByteBuffer> allocator;
     private boolean flipVertically;
 
     private int width;
@@ -30,36 +31,29 @@ public class PnmDecoder {
     private boolean is16Bit;
     private boolean isFloat;
 
-    public static StbImageInfo getInfo(ByteBuffer buffer) {
-        return getInfo(buffer, StbAllocator.DEFAULT);
+    public static boolean isPnm(ByteBuffer buffer) {
+        if (buffer.remaining() < 2) return false;
+        buffer=buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
+        int b0 = buffer.get() & 0xFF;
+        int b1 = buffer.get() & 0xFF;
+        return b0 == 'P' && (b1 >= '1' && b1 <= '9') && b1 != '8' && b1 != '9';
     }
-
-    public static StbImageInfo getInfo(ByteBuffer buffer, StbAllocator allocator) {
-        PnmDecoder decoder = new PnmDecoder(buffer.duplicate(), allocator, false);
-        return decoder.decodeInfo();
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels) {
-        return decode(buffer, desiredChannels, StbAllocator.DEFAULT, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator) {
-        return decode(buffer, desiredChannels, allocator, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator, boolean flipVertically) {
-        PnmDecoder decoder = new PnmDecoder(buffer, allocator, flipVertically);
-        return decoder.decode(desiredChannels);
-    }
-
-    public PnmDecoder(ByteBuffer buffer, StbAllocator allocator, boolean flipVertically) {
-        this.buffer = buffer.duplicate();
-        this.allocator = allocator != null ? allocator : StbAllocator.DEFAULT;
+ 
+    public PnmDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
+        this.buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
+        this.allocator = allocator;
         this.flipVertically = flipVertically;
         this.pos = 0;
     }
 
-    private StbImageInfo decodeInfo() {
+
+    @Override
+    public IntFunction<ByteBuffer> getAllocator() {
+        return allocator;
+    }
+
+    @Override
+    public StbImageInfo info() {
         try {
             buffer.position(0);
             pos = 0;
@@ -70,7 +64,8 @@ public class PnmDecoder {
         }
     }
 
-    private StbImageResult decode(int desiredChannels) {
+    @Override
+    public StbImageResult load(int desiredChannels) {
         // Rewind buffer to start before reading header
         buffer.position(0);
         pos = 0;  // Also reset our position tracker
@@ -82,7 +77,7 @@ public class PnmDecoder {
         int bytesPerChannel = (is16Bit || isFloat) ? 2 : 1;
         if (isFloat) bytesPerChannel = 4;
 
-        ByteBuffer output = allocator.allocate(width * height * outChannels * bytesPerChannel);
+        ByteBuffer output = allocator.apply(width * height * outChannels * bytesPerChannel);
 
         // Decode based on format
         if (format == PGM_BINARY) {
@@ -101,7 +96,7 @@ public class PnmDecoder {
         output.position(0);
 
         if (flipVertically) {
-            output = StbImage.verticalFlip(output, width, height, outChannels, is16Bit || isFloat);
+            output = StbImage.verticalFlip(getAllocator(),output, width, height, outChannels, is16Bit || isFloat);
         }
 
         return new StbImageResult(output, width, height, outChannels, desiredChannels, is16Bit, isFloat);

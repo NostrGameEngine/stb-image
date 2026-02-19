@@ -1,17 +1,17 @@
-package com.stb.image;
+package org.ngengine.stbimage;
 
-import com.stb.image.allocator.StbAllocator;
 import java.nio.ByteBuffer;
+import java.util.function.IntFunction;
 import java.util.zip.DataFormatException;
 import java.util.zip.Inflater;
+
 
 /**
  * PNG decoder with zlib decompression.
  * Supports 1/2/4/8/16-bit depths, all color types (grayscale, RGB, RGBA, palette).
  */
-public class PngDecoder {
+public class PngDecoder implements StbDecoder {
 
-    private static final int PNG_SIGNATURE = 0x89504E47;
     private static final int PNG_CHUNK_IHDR = 0x49484452;
     private static final int PNG_CHUNK_IDAT = 0x49444154;
     private static final int PNG_CHUNK_IEND = 0x49454E44;
@@ -27,7 +27,7 @@ public class PngDecoder {
 
     private ByteBuffer buffer;
     private int pos;
-    private StbAllocator allocator;
+    private IntFunction<ByteBuffer> allocator;
     private boolean flipVertically;
 
     private int width;
@@ -41,36 +41,32 @@ public class PngDecoder {
     private byte[] palette;
     private byte[] transparency;
 
-    public static StbImageInfo getInfo(ByteBuffer buffer) {
-        return getInfo(buffer, StbAllocator.DEFAULT);
+
+   
+    public static boolean isPng(ByteBuffer buffer) {
+        if (buffer.remaining() < 8) return false;
+        buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
+        byte[] sig = new byte[8];
+        buffer.get(sig);
+        return sig[0] == (byte) 0x89 && sig[1] == 0x50 && sig[2] == 0x4E && sig[3] == 0x47
+            && sig[4] == 0x0D && sig[5] == 0x0A && sig[6] == 0x1A && sig[7] == 0x0A;
     }
 
-    public static StbImageInfo getInfo(ByteBuffer buffer, StbAllocator allocator) {
-        PngDecoder decoder = new PngDecoder(buffer.duplicate(), allocator, false);
-        return decoder.decodeInfo();
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels) {
-        return decode(buffer, desiredChannels, StbAllocator.DEFAULT, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator) {
-        return decode(buffer, desiredChannels, allocator, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator, boolean flipVertically) {
-        PngDecoder decoder = new PngDecoder(buffer, allocator, flipVertically);
-        return decoder.decode(desiredChannels);
-    }
-
-    public PngDecoder(ByteBuffer buffer, StbAllocator allocator, boolean flipVertically) {
-        this.buffer = buffer.duplicate();
-        this.allocator = allocator != null ? allocator : StbAllocator.DEFAULT;
+    public PngDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
+        this.buffer = buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
+        this.allocator = allocator;
         this.flipVertically = flipVertically;
         this.pos = 0;
     }
 
-    private StbImageInfo decodeInfo() {
+
+    @Override
+    public IntFunction<ByteBuffer> getAllocator() {
+        return allocator;
+    }
+
+    @Override
+    public StbImageInfo info() {
         if (!readSignature()) {
             return null;
         }
@@ -91,7 +87,8 @@ public class PngDecoder {
         return null;
     }
 
-    private StbImageResult decode(int desiredChannels) {
+    @Override
+    public StbImageResult load(int desiredChannels) {
         if (!readSignature()) {
             throw new StbFailureException("PNG signature not found");
         }
@@ -117,10 +114,10 @@ public class PngDecoder {
                     throw new StbFailureException("IDAT before IHDR");
                 }
                 if (idatData == null) {
-                    idatData = allocator.allocate(length);
+                    idatData = allocator.apply(length);
                 } else {
                     int oldLimit = idatData.limit();
-                    ByteBuffer newData = allocator.allocate(idatData.remaining() + length);
+                    ByteBuffer newData = allocator.apply(idatData.remaining() + length);
                     newData.put(idatData);
                     idatData = newData;
                     idatData.limit(oldLimit + length);
@@ -161,10 +158,10 @@ public class PngDecoder {
             desiredChannels = (colorType == CT_GREY || colorType == CT_GREY_ALPHA) ? 1 : (colorType == CT_INDEXED ? 3 : srcChannels);
         }
 
-        ByteBuffer result = StbImage.convertChannels(imageData, srcChannels, width, height, desiredChannels, bitDepth == 16);
+        ByteBuffer result = StbImage.convertChannels(getAllocator(),imageData, srcChannels, width, height, desiredChannels, bitDepth == 16);
 
         if (flipVertically) {
-            result = StbImage.verticalFlip(result, width, height, desiredChannels, bitDepth == 16);
+            result = StbImage.verticalFlip(getAllocator(),result, width, height, desiredChannels, bitDepth == 16);
         }
 
         return new StbImageResult(result, width, height, desiredChannels, desiredChannels, bitDepth == 16, false);
@@ -301,7 +298,7 @@ public class PngDecoder {
         int channels = getChannels();
         int bytesPerChannel = bitDepth == 16 ? 2 : 1;
         int outSize = width * height * channels * bytesPerChannel;
-        ByteBuffer output = allocator.allocate(outSize);
+        ByteBuffer output = allocator.apply(outSize);
 
         int scanlineSize = getScanlineSize(width);
         byte[] prevScanline = new byte[scanlineSize];

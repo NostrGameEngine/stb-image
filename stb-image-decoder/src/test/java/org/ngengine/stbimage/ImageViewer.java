@@ -1,8 +1,11 @@
-package com.stb.image;
-
-import com.stb.image.allocator.StbAllocator;
+package org.ngengine.stbimage;
 
 import javax.swing.*;
+
+import org.ngengine.stbimage.StbImage;
+import org.ngengine.stbimage.StbImageInfo;
+import org.ngengine.stbimage.StbImageResult;
+
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.datatransfer.DataFlavor;
@@ -28,6 +31,7 @@ public class ImageViewer extends JFrame {
     private JLabel statusLabel;
     private JLabel formatLabel;
     private JLabel sizeLabel;
+    private StbImage stbImage;
 
     public ImageViewer() {
         super("STB Image Viewer");
@@ -35,8 +39,7 @@ public class ImageViewer extends JFrame {
         setSize(800, 600);
 
         // Initialize STB
-        StbImage.setAllocator(StbAllocator.DEFAULT);
-        StbImage.setFlipVertically(false);
+        stbImage = new StbImage();
 
         // Create UI
         createMenu();
@@ -117,7 +120,7 @@ public class ImageViewer extends JFrame {
             ByteBuffer buffer = ByteBuffer.wrap(data);
 
             // Get info first
-            StbImageInfo info = StbImage.info(buffer);
+            StbImageInfo info = stbImage.getDecoder(buffer, false).info();
             if (info == null) {
                 showError("Failed to load image: unknown format");
                 return;
@@ -128,7 +131,7 @@ public class ImageViewer extends JFrame {
 
             // Load full image with 4 channels (RGBA)
             buffer.rewind();
-            StbImageResult result = StbImage.load(buffer, 4);
+            StbImageResult result = stbImage.getDecoder(buffer, false).load(4);
 
             // Convert to BufferedImage
             BufferedImage img = createBufferedImage(result);

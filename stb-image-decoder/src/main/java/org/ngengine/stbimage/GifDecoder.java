@@ -1,18 +1,18 @@
-package com.stb.image;
+package org.ngengine.stbimage;
 
-import com.stb.image.allocator.StbAllocator;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.IntFunction;
+
 
 /**
  * GIF decoder (static), LZW decompression, palette to RGB conversion.
  */
-public class GifDecoder {
-
+public class GifDecoder implements StbDecoder{
     private static final String GIF87_SIGNATURE = "GIF87a";
     private static final String GIF89_SIGNATURE = "GIF89a";
-
+    
     // GIF extension codes
     private static final int EXT_GRAPHICS_CONTROL = 0xF9;
     private static final int EXT_APPLICATION = 0xFF;
@@ -22,7 +22,7 @@ public class GifDecoder {
 
     private ByteBuffer buffer;
     private int pos;
-    private StbAllocator allocator;
+    private IntFunction<ByteBuffer> allocator;
     private boolean flipVertically;
 
     private int width;
@@ -37,36 +37,29 @@ public class GifDecoder {
     private int transparentColorIndex = -1;
     private int disposalMethod;
 
-    public static StbImageInfo getInfo(ByteBuffer buffer) {
-        return getInfo(buffer, StbAllocator.DEFAULT);
+    public static boolean isGif(ByteBuffer buffer) {
+        if (buffer.remaining() < 6) return false;
+        buffer = buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        byte[] sig = new byte[6];
+        buffer.get(sig);
+        return (sig[0] == 'G' && sig[1] == 'I' && sig[2] == 'F' && sig[3] == '8' && (sig[4] == '7' || sig[4] == '9') && sig[5] == 'a');
     }
 
-    public static StbImageInfo getInfo(ByteBuffer buffer, StbAllocator allocator) {
-        GifDecoder decoder = new GifDecoder(buffer.duplicate(), allocator, false);
-        return decoder.decodeInfo();
+   
+    @Override
+    public IntFunction<ByteBuffer> getAllocator() {
+        return allocator;
     }
 
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels) {
-        return decode(buffer, desiredChannels, StbAllocator.DEFAULT, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator) {
-        return decode(buffer, desiredChannels, allocator, StbImage.isFlipVertically());
-    }
-
-    public static StbImageResult decode(ByteBuffer buffer, int desiredChannels, StbAllocator allocator, boolean flipVertically) {
-        GifDecoder decoder = new GifDecoder(buffer, allocator, flipVertically);
-        return decoder.decode(desiredChannels);
-    }
-
-    public GifDecoder(ByteBuffer buffer, StbAllocator allocator, boolean flipVertically) {
-        this.buffer = buffer.duplicate();
-        this.allocator = allocator != null ? allocator : StbAllocator.DEFAULT;
+    public GifDecoder(ByteBuffer buffer, IntFunction<ByteBuffer> allocator, boolean flipVertically) {
+        this.buffer = buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        this.allocator = allocator;
         this.flipVertically = flipVertically;
         this.pos = 0;
     }
 
-    private StbImageInfo decodeInfo() {
+    @Override
+    public StbImageInfo info() {
         try {
             // Read signature
             String signature = readString(6);
@@ -90,7 +83,8 @@ public class GifDecoder {
         }
     }
 
-    private StbImageResult decode(int desiredChannels) {
+    @Override
+    public StbImageResult load(int desiredChannels) {
         // Read signature
         String signature = readString(6);
         if (!signature.equals(GIF87_SIGNATURE) && !signature.equals(GIF89_SIGNATURE)) {
@@ -183,10 +177,10 @@ public class GifDecoder {
         int srcChannels = 4;
         int outChannels = (desiredChannels == 0) ? 3 : desiredChannels;
 
-        ByteBuffer result = StbImage.convertChannels(output, srcChannels, width, height, outChannels, false);
+        ByteBuffer result = StbImage.convertChannels(getAllocator(),output, srcChannels, width, height, outChannels, false);
 
         if (flipVertically) {
-            result = StbImage.verticalFlip(result, width, height, outChannels, false);
+            result = StbImage.verticalFlip(getAllocator(),  result, width, height, outChannels, false);
         }
 
         return new StbImageResult(result, width, height, outChannels, desiredChannels, false, false);
@@ -256,7 +250,7 @@ public class GifDecoder {
     }
 
     private ByteBuffer lzwDecode(byte[] lzwData, int width, int height, byte[] colorTable) {
-        ByteBuffer output = allocator.allocate(width * height * 4);
+        ByteBuffer output = allocator.apply(width * height * 4);
 
         // Create sub-buffer for LZW decoding
         ByteBuffer data = ByteBuffer.wrap(lzwData);

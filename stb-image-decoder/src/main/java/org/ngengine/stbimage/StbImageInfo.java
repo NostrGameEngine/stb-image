@@ -1,4 +1,4 @@
-package com.stb.image;
+package org.ngengine.stbimage;
 
 /**
  * Information about an image without fully decoding it.

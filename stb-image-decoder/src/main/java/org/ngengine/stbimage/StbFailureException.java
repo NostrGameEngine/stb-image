@@ -1,4 +1,4 @@
-package com.stb.image;
+package org.ngengine.stbimage;
 
 /**
  * Exception thrown when image decoding fails.

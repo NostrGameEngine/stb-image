@@ -1,7 +1,7 @@
-package com.stb.image;
+package org.ngengine.stbimage;
 
-import com.stb.image.allocator.StbAllocator;
 import java.nio.ByteBuffer;
+
 
 /**
  * Result of an image decode operation.
