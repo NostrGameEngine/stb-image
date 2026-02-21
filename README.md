@@ -17,7 +17,7 @@ This project is best suited for:
 The implementation is:
 
 - memory-safe 
-- thread-safe
+- no global state: so it is thread-safe as long as the decoder instances are not shared between threads
 - hardened against OOM and DoS attack vectors
 - and it intentionally does not perform any filesystem access
 
