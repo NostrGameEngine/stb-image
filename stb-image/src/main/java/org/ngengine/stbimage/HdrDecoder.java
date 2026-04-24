@@ -56,7 +56,7 @@ public class HdrDecoder implements StbDecoder {
         int savedH = height;
         try {
             parseHeader();
-            return new StbImageInfo(width, height, 3, false, StbImageInfo.ImageFormat.HDR);
+            return new StbImageInfo(width, height, 3, false, true, StbImageInfo.ImageFormat.HDR);
         } catch (RuntimeException e) {
             return null;
         } finally {

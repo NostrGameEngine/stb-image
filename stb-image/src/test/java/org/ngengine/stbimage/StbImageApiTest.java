@@ -8,6 +8,7 @@ import java.lang.reflect.Method;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -346,7 +347,45 @@ public class StbImageApiTest {
         assertEquals(200, info.getHeight());
         assertEquals(3, info.getChannels());
         assertFalse(info.is16Bit());
+        assertFalse(info.isFloat());
         assertEquals(StbImageInfo.ImageFormat.JPEG, info.getFormat());
+    }
+
+    @Test
+    void testStbImageInfoFloatConstructor() {
+        StbImageInfo info = new StbImageInfo(4, 5, 3, false, true, StbImageInfo.ImageFormat.HDR);
+
+        assertFalse(info.is16Bit());
+        assertTrue(info.isFloat());
+        assertEquals(StbImageInfo.ImageFormat.HDR, info.getFormat());
+    }
+
+    @Test
+    void testHdrInfoIsFloat() throws IOException {
+        StbImage stb = new StbImage();
+        StbDecoder decoder = stb.getDecoder(ByteBuffer.wrap(loadResourceBytes("testData/image/rgbe_rle.hdr")), false);
+
+        StbImageInfo info = decoder.info();
+        assertEquals(StbImageInfo.ImageFormat.HDR, info.getFormat());
+        assertFalse(info.is16Bit());
+        assertTrue(info.isFloat());
+    }
+
+    @Test
+    void testPfmInfoIsFloatButNot16Bit() {
+        ByteBuffer pfm = ByteBuffer.allocate(21);
+        pfm.put("Pf\n1 1\n1\n".getBytes(StandardCharsets.US_ASCII));
+        pfm.putFloat(1.0f);
+        pfm.putFloat(1.0f);
+        pfm.putFloat(1.0f);
+        pfm.flip();
+        StbImage stb = new StbImage();
+        StbDecoder decoder = stb.getDecoder(pfm, false);
+
+        StbImageInfo info = decoder.info();
+        assertEquals(StbImageInfo.ImageFormat.PNM, info.getFormat());
+        assertFalse(info.is16Bit());
+        assertTrue(info.isFloat());
     }
 
     @Test

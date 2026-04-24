@@ -8,6 +8,7 @@ public class StbImageInfo {
     private final int height;
     private final int channels;
     private final boolean is16Bit;
+    private final boolean isFloat;
     private final ImageFormat format;
     private final int numFrames;
 
@@ -37,7 +38,21 @@ public class StbImageInfo {
      * @param format detected image format
      */
     public StbImageInfo(int width, int height, int channels, boolean is16Bit, ImageFormat format) {
-        this(width, height, channels, is16Bit, format, 1);
+        this(width, height, channels, is16Bit, false, format, 1);
+    }
+
+    /**
+     * Creates image metadata.
+     *
+     * @param width image width
+     * @param height image height
+     * @param channels channel count
+     * @param is16Bit true for 16-bit source data
+     * @param isFloat true for floating-point source data
+     * @param format detected image format
+     */
+    public StbImageInfo(int width, int height, int channels, boolean is16Bit, boolean isFloat, ImageFormat format) {
+        this(width, height, channels, is16Bit, isFloat, format, 1);
     }
 
     /**
@@ -51,10 +66,26 @@ public class StbImageInfo {
      * @param numFrames total frame count (1 for non-animated images)
      */
     public StbImageInfo(int width, int height, int channels, boolean is16Bit, ImageFormat format, int numFrames) {
+        this(width, height, channels, is16Bit, false, format, numFrames);
+    }
+
+    /**
+     * Creates image metadata.
+     *
+     * @param width image width
+     * @param height image height
+     * @param channels channel count
+     * @param is16Bit true for 16-bit source data
+     * @param isFloat true for floating-point source data
+     * @param format detected image format
+     * @param numFrames total frame count (1 for non-animated images)
+     */
+    public StbImageInfo(int width, int height, int channels, boolean is16Bit, boolean isFloat, ImageFormat format, int numFrames) {
         this.width = width;
         this.height = height;
         this.channels = channels;
         this.is16Bit = is16Bit;
+        this.isFloat = isFloat;
         this.format = format;
         this.numFrames = Math.max(1, numFrames);
     }
@@ -96,6 +127,23 @@ public class StbImageInfo {
     }
 
     /**
+     * Indicates whether source data uses floating-point channels.
+     *
+     * @return true for floating-point source data
+     */
+    public boolean isFloat() {
+        return isFloat;
+    }
+
+    /**
+     * @deprecated Use {@link #isFloat()} instead.
+     */
+    @Deprecated
+    public boolean isHDR() {
+        return isFloat();
+    }
+
+    /**
      * Returns the detected image format.
      *
      * @return format enum
@@ -115,8 +163,9 @@ public class StbImageInfo {
 
     @Override
     public String toString() {
+        String storage = isFloat ? " float" : (is16Bit ? " 16-bit" : "");
         return String.format("StbImageInfo[%s %dx%d %d channels%s, %d frame%s]",
-            format, width, height, channels, is16Bit ? " 16-bit" : "",
+            format, width, height, channels, storage,
             numFrames, numFrames == 1 ? "" : "s");
     }
 }

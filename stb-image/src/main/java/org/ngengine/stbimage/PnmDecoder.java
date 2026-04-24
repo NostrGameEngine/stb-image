@@ -42,7 +42,7 @@ public class PnmDecoder implements StbDecoder {
         buffer=buffer.duplicate().order(java.nio.ByteOrder.BIG_ENDIAN);
         int b0 = buffer.get() & 0xFF;
         int b1 = buffer.get() & 0xFF;
-        return b0 == 'P' && (b1 >= '1' && b1 <= '9') && b1 != '8' && b1 != '9';
+        return b0 == 'P' && ((b1 >= '1' && b1 <= '7') || b1 == 'f');
     }
  
     /**
@@ -78,7 +78,7 @@ public class PnmDecoder implements StbDecoder {
             buffer.position(0);
             pos = 0;
             readHeader();
-            return new StbImageInfo(width, height, channels, is16Bit || isFloat, StbImageInfo.ImageFormat.PNM);
+            return new StbImageInfo(width, height, channels, is16Bit, isFloat, StbImageInfo.ImageFormat.PNM);
         } catch (Exception e) {
             return null;
         }
