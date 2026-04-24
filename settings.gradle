@@ -3,4 +3,4 @@ plugins {
 }
 
 rootProject.name = 'stb-image'
-include 'stb-image-decoder'
+include 'stb-image'

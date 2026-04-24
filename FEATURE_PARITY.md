@@ -2,8 +2,8 @@
 
 ## Scope and scoring policy
 
-Reference: `stb-image-decoder/src/test/c/stb_image.h` (stb_image v2.30)  
-Port: `stb-image-decoder/src/main/java/org/ngengine/stbimage`
+Reference: `stb-image/src/test/c/stb_image.h` (stb_image v2.30)  
+Port: `stb-image/src/main/java/org/ngengine/stbimage`
 
 Scoring rules:
 1. Design divergences that keep the same capability are scored **A**.
@@ -58,6 +58,6 @@ Quality labels:
 ## Test coverage and evidence
 
 Primary test suites:
-- `stb-image-decoder/src/test/java/org/ngengine/stbimage/StbImagePixelTest.java`
-- `stb-image-decoder/src/test/java/org/ngengine/stbimage/StbImageApiTest.java`
-- `stb-image-decoder/src/test/java/org/ngengine/stbimage/GifAnimationTest.java`
+- `stb-image/src/test/java/org/ngengine/stbimage/StbImagePixelTest.java`
+- `stb-image/src/test/java/org/ngengine/stbimage/StbImageApiTest.java`
+- `stb-image/src/test/java/org/ngengine/stbimage/GifAnimationTest.java`

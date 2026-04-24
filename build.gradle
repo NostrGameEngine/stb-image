@@ -5,7 +5,7 @@ plugins {
 }
 
 def repoSlug = providers.environmentVariable("GITHUB_REPOSITORY")
-        .orElse("NostrGameEngine/stb-image-decoder")
+        .orElse("NostrGameEngine/stb-image")
         .get()
 def projectUrl = "https://github.com/${repoSlug}"
 

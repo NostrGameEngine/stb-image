@@ -9,17 +9,17 @@ echo "=== Generating reference data from stb_image.h ==="
 
 # Create expected directory
 mkdir -p build
-mkdir -p stb-image-decoder/src/test/resources/testData/expected
+mkdir -p stb-image/src/test/resources/testData/expected
 
 
  
 echo "Compiling stb_image reference generator..."
-gcc -O2 -Isrc/test/c -o build/stb_ref stb-image-decoder/src/test/c/stb_ref.c -lm
+gcc -O2 -Isrc/test/c -o build/stb_ref stb-image/src/test/c/stb_ref.c -lm
 
 echo ""
 echo "Processing images..."
 
-for img in stb-image-decoder/src/test/resources/testData/image/*; do
+for img in stb-image/src/test/resources/testData/image/*; do
     if [ -f "$img" ]; then
         # Get base filename without extension
         basename=$(basename "$img")
@@ -49,21 +49,21 @@ for img in stb-image-decoder/src/test/resources/testData/image/*; do
                 ;;
         esac
 
-        output="stb-image-decoder/src/test/resources/testData/expected/${basename}.bin"
+        output="stb-image/src/test/resources/testData/expected/${basename}.bin"
         build/stb_ref "$img" "$output" $channels || echo "FAILED: $basename"
     fi
 done
 
 echo ""
-echo "=== Done! Reference files in stb-image-decoder/src/test/resources/testData/expected/ ==="
+echo "=== Done! Reference files in stb-image/src/test/resources/testData/expected/ ==="
 echo "Generating index..."
 
 
 
-find "stb-image-decoder/src/test/resources/testData/image/" -type f -print0 \
+find "stb-image/src/test/resources/testData/image/" -type f -print0 \
   | sort -z \
   | while IFS= read -r -d '' f; do
       realpath --relative-to="$PWD" "$f"
-    done > "stb-image-decoder/src/test/resources/testData/index.txt"
+    done > "stb-image/src/test/resources/testData/index.txt"
 
 echo "Done"

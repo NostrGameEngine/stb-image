@@ -1,7 +1,7 @@
 # FEATURE PARITY (STB SECTION-KEYED)
 
-Reference: `stb-image-decoder/src/test/c/stb_image.h` (v2.30)  
-Port: `stb-image-decoder/src/main/java/org/ngengine/stbimage`
+Reference: `stb-image/src/test/c/stb_image.h` (v2.30)  
+Port: `stb-image/src/main/java/org/ngengine/stbimage`
 
 Scoring rules:
 - Design divergences with equivalent capability are scored **A**.

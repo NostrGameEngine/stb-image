@@ -72,8 +72,8 @@ try {
 
 ## Unit tests and parity checks
 
-This repo includes a [large collection of reference images](stb-image-decoder/src/test/resources/testData/image), covering a wide range of formats, features, and edge cases. The unit tests check also for pixel parity with images decoded with the [original stb_image C library (v2.30) included in this repo](stb-image-decoder/src/test/c/). 
-These images have various licenses and are not suitable to be shipped in production, see [testData/README.md](stb-image-decoder/src/test/resources/testData/README.md) for details.
+This repo includes a [large collection of reference images](stb-image/src/test/resources/testData/image), covering a wide range of formats, features, and edge cases. The unit tests check also for pixel parity with images decoded with the [original stb_image C library (v2.30) included in this repo](stb-image/src/test/c/). 
+These images have various licenses and are not suitable to be shipped in production, see [testData/README.md](stb-image/src/test/resources/testData/README.md) for details.
 
 
 
@@ -92,7 +92,7 @@ Then run the tests with
 
 ## Manual test
 
-[ImageViewer.java](stb-image-decoder/src/test/java/org/ngengine/stbimage/ImageViewer.java) is a simple Swing-based image viewer that you can launch from vscode to manually test decoding of various images by dragging and dropping them onto the window.
+[ImageViewer.java](stb-image/src/test/java/org/ngengine/stbimage/ImageViewer.java) is a simple Swing-based image viewer that you can launch from vscode to manually test decoding of various images by dragging and dropping them onto the window.
 
 
  
