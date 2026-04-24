@@ -118,8 +118,17 @@ public class StbImageResult {
      *
      * @return true for HDR float output
      */
-    public boolean isHdr() {
+    public boolean isFloat() {
         return isHdr;
+    }
+
+
+    /**
+     * @deprecated Use {@link #isFloat()} instead.
+     */
+    @Deprecated
+    public boolean isHdr() {
+        return isFloat();
     }
 
     /**
