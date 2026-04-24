@@ -497,7 +497,9 @@ public class GifDecoder implements StbDecoder {
             if (blockSize == 0) break;
             byte[] chunk = new byte[blockSize];
             ensureAvailable(blockSize, "GIF sub-block truncated");
-            buffer.get(pos, chunk, 0, blockSize);
+            ByteBuffer source = buffer.duplicate();
+            source.position(pos);
+            source.get(chunk, 0, blockSize);
             pos += blockSize;
             chunks.add(chunk);
             total += blockSize;

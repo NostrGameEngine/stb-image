@@ -2,6 +2,7 @@ package org.ngengine.stbimage;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -18,9 +19,19 @@ class GifAnimationTest {
             if (is == null) {
                 throw new IOException("Resource not found: " + resourcePath);
             }
-            byte[] data = is.readAllBytes();
+            byte[] data = readAllBytes(is);
             return ByteBuffer.wrap(data);
         }
+    }
+
+    private static byte[] readAllBytes(InputStream in) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int read;
+        while ((read = in.read(buffer)) != -1) {
+            out.write(buffer, 0, read);
+        }
+        return out.toByteArray();
     }
 
     private int[] loadReference(String refName) throws IOException {

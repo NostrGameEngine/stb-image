@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -64,9 +65,19 @@ public class StbImagePixelTest {
             if (is == null) {
                 throw new IOException("Resource not found: " + resourcePath);
             }
-            byte[] data = is.readAllBytes();
+            byte[] data = readAllBytes(is);
             return ByteBuffer.wrap(data);
         }
+    }
+
+    private static byte[] readAllBytes(InputStream in) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int read;
+        while ((read = in.read(buffer)) != -1) {
+            out.write(buffer, 0, read);
+        }
+        return out.toByteArray();
     }
 
     /**
@@ -156,7 +167,7 @@ public class StbImagePixelTest {
 
     private boolean matchesExtensionFilter(String filename) {
         String extFilter = System.getenv("TEST_EXT");
-        if (extFilter == null || extFilter.isBlank()) return true;
+        if (isBlank(extFilter)) return true;
         extFilter = extFilter.toLowerCase();
         if (extFilter.startsWith(".")) extFilter = extFilter.substring(1);
         String fileExt = "";
@@ -167,7 +178,7 @@ public class StbImagePixelTest {
 
     private int testLimit(String envName, int fallback) {
         String v = System.getenv(envName);
-        if (v == null || v.isBlank()) {
+        if (isBlank(v)) {
             return fallback;
         }
         try {
@@ -179,11 +190,15 @@ public class StbImagePixelTest {
 
     private boolean envFlag(String envName, boolean fallback) {
         String v = System.getenv(envName);
-        if (v == null || v.isBlank()) {
+        if (isBlank(v)) {
             return fallback;
         }
         v = v.trim().toLowerCase();
         return v.equals("1") || v.equals("true") || v.equals("yes") || v.equals("on");
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 
     /**

@@ -165,7 +165,9 @@ public class PngDecoder implements StbDecoder {
                     throw new StbFailureException("IDAT before IHDR");
                 }
                 byte[] tmp = new byte[length];
-                buffer.get(pos, tmp, 0, length);
+                ByteBuffer chunk = buffer.duplicate();
+                chunk.position(pos);
+                chunk.get(tmp, 0, length);
                 idat.write(tmp, 0, length);
                 pos += length;
             } else if (type == PNG_CHUNK_IEND) {

@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -426,8 +427,18 @@ public class StbImageApiTest {
     private static byte[] loadResourceBytes(String path) throws IOException {
         try (InputStream in = StbImageApiTest.class.getClassLoader().getResourceAsStream(path)) {
             assertNotNull(in, "Missing resource: " + path);
-            return in.readAllBytes();
+            return readAllBytes(in);
         }
+    }
+
+    private static byte[] readAllBytes(InputStream in) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int read;
+        while ((read = in.read(buffer)) != -1) {
+            out.write(buffer, 0, read);
+        }
+        return out.toByteArray();
     }
 
     private static byte[] expectedConvert8(byte[] input, int srcChannels, int dstChannels, int pixels) {
