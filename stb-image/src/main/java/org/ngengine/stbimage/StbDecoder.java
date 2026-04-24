@@ -1,6 +1,7 @@
 package org.ngengine.stbimage;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.IntFunction;
 
@@ -108,6 +109,8 @@ public interface StbDecoder {
      * @return
      */
     public default List<StbImageResult> loadAllFrames(int desiredChannels) {
-        return List.of(load(desiredChannels));
+        List<StbImageResult> frames = new ArrayList<>();
+        frames.add(load(desiredChannels));
+        return frames;
     }
 }

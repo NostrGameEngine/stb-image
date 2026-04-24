@@ -1,6 +1,6 @@
 # StbImage for Java (NGE port)
 
-**This is not a binding or wrapper: this repository contains an experimental, pure-Java (Java 11+) port/fork of `stb_image.h`**
+**This is not a binding or wrapper: this repository contains an experimental, pure-Java (Java 8+) port/fork of `stb_image.h`**
 
 This project is best suited for:
 
