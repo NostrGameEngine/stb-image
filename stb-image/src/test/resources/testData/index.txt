@@ -54,6 +54,7 @@ stb-image/src/test/resources/testData/image/Blender-FBX-Import-01.png
 stb-image/src/test/resources/testData/image/Blender-FBX-Import-02.png
 stb-image/src/test/resources/testData/image/Blender-Transform.png
 stb-image/src/test/resources/testData/image/Blender-Units.png
+stb-image/src/test/resources/testData/image/bmp_topdown_24.bmp
 stb-image/src/test/resources/testData/image/Block.bmp
 stb-image/src/test/resources/testData/image/Blood-Decal.jpg
 stb-image/src/test/resources/testData/image/Blue.png
@@ -662,6 +663,10 @@ stb-image/src/test/resources/testData/image/Terrain001-Tint-1-0.png
 stb-image/src/test/resources/testData/image/Terrain001-Tint-1-1.png
 stb-image/src/test/resources/testData/image/Terrain-Decal.jpg
 stb-image/src/test/resources/testData/image/TerrainHeights.png
+stb-image/src/test/resources/testData/image/tga_16bit_truecolor.tga
+stb-image/src/test/resources/testData/image/tga_paletted_24bit.tga
+stb-image/src/test/resources/testData/image/tga_paletted_8bit_gray.tga
+stb-image/src/test/resources/testData/image/tga_paletted_rle_16bit_index.tga
 stb-image/src/test/resources/testData/image/Terrain.jpg
 stb-image/src/test/resources/testData/image/Terrain.png
 stb-image/src/test/resources/testData/image/Terrain-Road.jpg

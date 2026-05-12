@@ -390,6 +390,118 @@ public class StbImageApiTest {
     }
 
     @Test
+    void testInfoReturnsUsableMetadataAndDoesNotConsumeDecoder() throws IOException {
+        Object[][] cases = {
+            {"testData/image/rgba8.png", StbImageInfo.ImageFormat.PNG, 4, 4, false, false},
+            {"testData/image/rgb_baseline.jpg", StbImageInfo.ImageFormat.JPEG, 3, 3, false, false},
+            {"testData/image/rgba32.bmp", StbImageInfo.ImageFormat.BMP, 4, 4, false, false},
+            {"testData/image/pal8.bmp", StbImageInfo.ImageFormat.BMP, 4, 4, false, false},
+            {"testData/image/rgba_rle.tga", StbImageInfo.ImageFormat.TGA, 4, 4, false, false},
+            {"testData/image/rgb.ppm", StbImageInfo.ImageFormat.PNM, 3, 3, false, false},
+            {"testData/image/single.gif", StbImageInfo.ImageFormat.GIF, 4, 4, false, false},
+            {"testData/image/rgb.psd", StbImageInfo.ImageFormat.PSD, 4, 4, false, false},
+            {"testData/image/rgbe_rle.hdr", StbImageInfo.ImageFormat.HDR, 3, 3, false, true},
+            {"testData/image/minimal.pic", StbImageInfo.ImageFormat.PIC, 3, 3, false, false},
+        };
+
+        StbImage stb = new StbImage();
+        for (Object[] c : cases) {
+            String path = (String) c[0];
+            StbImageInfo.ImageFormat format = (StbImageInfo.ImageFormat) c[1];
+            int channels = (Integer) c[2];
+            int loadChannels = (Integer) c[3];
+            boolean is16Bit = (Boolean) c[4];
+            boolean isFloat = (Boolean) c[5];
+
+            StbDecoder decoder = stb.getDecoder(ByteBuffer.wrap(loadResourceBytes(path)), false);
+            StbImageInfo info = decoder.info();
+            assertNotNull(info, path);
+            assertEquals(format, info.getFormat(), path);
+            assertEquals(channels, info.getChannels(), path);
+            assertEquals(is16Bit, info.is16Bit(), path);
+            assertEquals(isFloat, info.isFloat(), path);
+
+            StbImageResult result = decoder.load(0);
+            assertEquals(info.getWidth(), result.getWidth(), path);
+            assertEquals(info.getHeight(), result.getHeight(), path);
+            assertEquals(loadChannels, result.getChannels(), path);
+        }
+    }
+
+    @Test
+    void testTgaProbeRejectsRandomData() {
+        byte[] random = new byte[32];
+        for (int i = 0; i < random.length; i++) {
+            random[i] = (byte) (i * 17 + 3);
+        }
+        assertFalse(TgaDecoder.isTga(ByteBuffer.wrap(random)));
+        assertThrows(StbFailureException.class, () -> new StbImage().getDecoder(ByteBuffer.wrap(random), false));
+    }
+
+    @Test
+    void testTgaInfoAndLoad16BitTrueColorFixture() throws IOException {
+        StbDecoder decoder = new StbImage().getDecoder(
+            ByteBuffer.wrap(loadResourceBytes("testData/image/tga_16bit_truecolor.tga")),
+            false
+        );
+        StbImageInfo info = decoder.info();
+        assertNotNull(info);
+        assertEquals(3, info.getChannels());
+
+        StbImageResult result = decoder.load(0);
+        assertEquals(3, result.getChannels());
+        assertEquals(255, Byte.toUnsignedInt(result.getData().get(0)));
+        assertEquals(0, Byte.toUnsignedInt(result.getData().get(1)));
+        assertEquals(0, Byte.toUnsignedInt(result.getData().get(2)));
+    }
+
+    @Test
+    void testTgaPalettedFixtureInfoChannels() throws IOException {
+        Object[][] cases = {
+            {"testData/image/tga_paletted_8bit_gray.tga", 1},
+            {"testData/image/tga_paletted_24bit.tga", 3},
+            {"testData/image/tga_paletted_rle_16bit_index.tga", 3},
+        };
+
+        StbImage stb = new StbImage();
+        for (Object[] c : cases) {
+            String path = (String) c[0];
+            int channels = (Integer) c[1];
+            StbDecoder decoder = stb.getDecoder(ByteBuffer.wrap(loadResourceBytes(path)), false);
+            StbImageInfo info = decoder.info();
+            assertNotNull(info, path);
+            assertEquals(channels, info.getChannels(), path);
+            assertEquals(channels, decoder.load(0).getChannels(), path);
+        }
+    }
+
+    @Test
+    void testBmpTopDownRepeatedLoadIsStable() throws IOException {
+        byte[] bmp = loadResourceBytes("testData/image/bmp_topdown_24.bmp");
+        StbDecoder decoder = new StbImage().getDecoder(ByteBuffer.wrap(bmp), false);
+
+        StbImageResult first = decoder.load(3);
+        StbImageResult second = decoder.load(3);
+
+        assertEquals(3, first.getChannels());
+        assertEquals(3, second.getChannels());
+        for (int i = 0; i < 6; i++) {
+            assertEquals(
+                Byte.toUnsignedInt(first.getData().get(i)),
+                Byte.toUnsignedInt(second.getData().get(i)),
+                "pixel byte " + i
+            );
+        }
+
+        assertEquals(255, Byte.toUnsignedInt(first.getData().get(0)));
+        assertEquals(0, Byte.toUnsignedInt(first.getData().get(1)));
+        assertEquals(0, Byte.toUnsignedInt(first.getData().get(2)));
+        assertEquals(0, Byte.toUnsignedInt(first.getData().get(3)));
+        assertEquals(0, Byte.toUnsignedInt(first.getData().get(4)));
+        assertEquals(255, Byte.toUnsignedInt(first.getData().get(5)));
+    }
+
+    @Test
     void testPicDecoderFixtureUncompressedRgb() throws IOException {
         byte[] pic = loadResourceBytes("testData/image/minimal.pic");
         StbImage stb = new StbImage();
