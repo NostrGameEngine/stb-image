@@ -66,46 +66,63 @@ public class BmpDecoder implements StbDecoder{
      */
     @Override
     public StbImageInfo info() {
-        if (!readSignature()) {
-            return null;
-        }
-
-        // Skip to DIB header (file header is 14 bytes)
-        pos = 14;
-        int headerSize = readU32LE();
-
-        switch (headerSize) {
-            case 12: // BITMAPCOREHEADER (OS/2)
-                width = readU16LE();
-                height = readU16LE();
-                break;
-            case 40: // BITMAPINFOHEADER
-            case 52: // BITMAPV4HEADER
-            case 108: // BITMAPV5HEADER
-                width = readS32LE();
-                int heightTmp = readS32LE();
-                height = Math.abs(heightTmp);
-                break;
-            default:
+        int savedPos = pos;
+        try {
+            pos = 0;
+            if (!readSignature()) {
                 return null;
+            }
+
+            // Skip to DIB header (file header is 14 bytes)
+            pos = 14;
+            int headerSize = readU32LE();
+
+            switch (headerSize) {
+                case 12: // BITMAPCOREHEADER (OS/2)
+                    width = readU16LE();
+                    height = readU16LE();
+                    break;
+                case 40: // BITMAPINFOHEADER
+                case 52: // BITMAPV2INFOHEADER
+                case 56: // BITMAPV3INFOHEADER
+                case 108: // BITMAPV4HEADER
+                case 124: // BITMAPV5HEADER
+                    width = readS32LE();
+                    int heightTmp = readS32LE();
+                    height = Math.abs(heightTmp);
+                    break;
+                default:
+                    return null;
+            }
+
+            if (width <= 0 || height <= 0) {
+                return null;
+            }
+
+            pos += 2; // planes
+            int bpp = readU16LE();
+            bitsPerPixel = bpp;
+            compression = headerSize == 12 ? BI_RGB : readU32LE();
+
+            // This decoder expands paletted BMPs to RGBA on its default load path.
+            int infoChannels;
+            if (bpp <= 8) {
+                infoChannels = 4;
+            } else if (bpp == 32) {
+                infoChannels = 4;
+            } else if (bpp == 16 || bpp == 24) {
+                infoChannels = 3;
+            } else {
+                return null;
+            }
+
+            channels = infoChannels;
+            return new StbImageInfo(width, height, channels, false, StbImageInfo.ImageFormat.BMP);
+        } catch (RuntimeException e) {
+            return null;
+        } finally {
+            pos = savedPos;
         }
-
-        pos += 2; // planes
-        int bpp = readU16LE();
-        compression = readU32LE();
-
-        // Determine channels based on bits per pixel
-        int infoChannels;
-        if (bpp <= 8) {
-            infoChannels = 1;
-        } else if (bpp == 24 || bpp == 32) {
-            infoChannels = 3;
-            if (bpp == 32) infoChannels = 4;
-        } else {
-            infoChannels = 3;
-        }
-
-        return new StbImageInfo(width, height, infoChannels, false, StbImageInfo.ImageFormat.BMP);
     }
 
     /**
@@ -121,6 +138,8 @@ public class BmpDecoder implements StbDecoder{
      */
     @Override
     public StbImageResult load(int desiredChannels) {
+        pos = 0;
+        boolean actualFlipVertically = flipVertically;
         if (!readSignature()) {
             throw new StbFailureException("Not a BMP file");
         }
@@ -156,7 +175,7 @@ public class BmpDecoder implements StbDecoder{
                 height = Math.abs(heightTmp);
                 boolean topDown = heightTmp < 0;
                 if (topDown) {
-                    flipVertically = !flipVertically;
+                    actualFlipVertically = !actualFlipVertically;
                 }
                 pos += 2; // planes
                 bitsPerPixel = readU16LE();
@@ -195,7 +214,7 @@ public class BmpDecoder implements StbDecoder{
             int actualPaletteEntries = maxPaletteBytes / paletteEntrySize;
             paletteSize = Math.min(paletteSize, actualPaletteEntries);
             paletteSize = Math.max(paletteSize, 1); // At least 1 entry
-        } else if (bitsPerPixel == 24) {
+        } else if (bitsPerPixel == 16 || bitsPerPixel == 24) {
             channels = 3;
         } else if (bitsPerPixel == 32) {
             channels = 4;
@@ -282,7 +301,7 @@ public class BmpDecoder implements StbDecoder{
 
         ByteBuffer result = StbUtils.convertChannels(getAllocator(),output, channels, width, height, desiredChannels, false);
 
-        if (flipVertically) {
+        if (actualFlipVertically) {
             result = StbUtils.verticalFlip(getAllocator(),result, width, height, desiredChannels, false);
         }
 
