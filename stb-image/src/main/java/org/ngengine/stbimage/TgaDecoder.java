@@ -1,7 +1,6 @@
 package org.ngengine.stbimage;
 
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.function.IntFunction;
 
 
@@ -11,6 +10,7 @@ import java.util.function.IntFunction;
 public class TgaDecoder implements StbDecoder {
 
     // TGA header field values
+    private static final int TYPE_UNMAPPED_RGB = 2;
     private static final int TYPE_UNMAPPED_GRAY = 3;
     private static final int TYPE_RLE_RGB = 10;
     private static final int TYPE_RLE_GRAY = 11;
@@ -28,8 +28,10 @@ public class TgaDecoder implements StbDecoder {
     private int height;
     private int bitsPerPixel;
     private int channels;
+    private int colorMapType;
     private int imageType;
     private boolean rleCompressed;
+    private boolean originTop;
     private int colorMapOrigin;
     private int colorMapLength;
     private int colorMapDepth;
@@ -69,17 +71,36 @@ public class TgaDecoder implements StbDecoder {
      * @return true when the source can be considered a potential TGA payload
      */
     public static boolean isTga(ByteBuffer src) {
-        if (src.remaining() < 18)
+        if (src.remaining() < 18) {
             return false;
-
-        return true;
+        }
+        ByteBuffer probe = src.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        int p = probe.position();
+        int remaining = probe.remaining();
+        try {
+            return isPlausibleHeader(
+                probe.get(p) & 0xFF,
+                probe.get(p + 1) & 0xFF,
+                probe.get(p + 2) & 0xFF,
+                Short.toUnsignedInt(probe.getShort(p + 5)),
+                probe.get(p + 7) & 0xFF,
+                Short.toUnsignedInt(probe.getShort(p + 12)),
+                Short.toUnsignedInt(probe.getShort(p + 14)),
+                probe.get(p + 16) & 0xFF,
+                remaining
+            );
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     private int readU8() {
+        ensureRemaining(1);
         return buffer.get() & 0xFF;
     }
 
     private int readU16LE() {
+        ensureRemaining(2);
         int b0 = buffer.get() & 0xFF;
         int b1 = buffer.get() & 0xFF;
         return b0 | (b1 << 8);
@@ -90,12 +111,17 @@ public class TgaDecoder implements StbDecoder {
      */
     @Override
     public StbImageInfo info() {
+        int savedPosition = buffer.position();
         try {
+            buffer.position(0);
             readHeader();
+            channels = getInfoChannels();
 
             return new StbImageInfo(width, height, channels, false, StbImageInfo.ImageFormat.TGA);
         } catch (Exception e) {
             return null;
+        } finally {
+            buffer.position(savedPosition);
         }
     }
 
@@ -104,48 +130,39 @@ public class TgaDecoder implements StbDecoder {
      */
     @Override
     public StbImageResult load(int desiredChannels) {
+        buffer.position(0);
         readHeader();
 
         StbLimits.validateDimensions(width, height);
 
         // Determine channels based on type
-        if (imageType == TYPE_UNMAPPED_GRAY || imageType == TYPE_RLE_GRAY) {
-            channels = 1;
-        } else if (bitsPerPixel == 16 || bitsPerPixel == 24 || bitsPerPixel == 32) {
-            channels = (bitsPerPixel == 16) ? 2 : (bitsPerPixel == 24 ? 3 : 4);
-        } else {
-            channels = 4;
-        }
+        channels = getInfoChannels();
 
         // Read color map if present
-        if (colorMapLength > 0) {
-            int entrySize = (colorMapDepth + 7) / 8;
-            colorMap = new byte[colorMapLength * 4]; // Convert to RGBA
+        if (isColorMapped()) {
+            colorMap = new byte[colorMapLength * channels];
 
             for (int i = 0; i < colorMapLength; i++) {
-                int offset = i * 4;
-                if (colorMapDepth == 15 || colorMapDepth == 16) {
-                    int val = readU16LE();
-                    colorMap[offset] = (byte) ((val & 0x1F) * 8);       // B
-                    colorMap[offset + 1] = (byte) (((val >> 5) & 0x1F) * 8); // G
-                    colorMap[offset + 2] = (byte) (((val >> 10) & 0x1F) * 8); // R
-                    colorMap[offset + 3] = (byte) ((val & 0x8000) != 0 ? 0 : 0xFF); // A
+                int offset = i * channels;
+                if (colorMapDepth == 8) {
+                    colorMap[offset] = (byte) readU8();
+                } else if (colorMapDepth == 15 || colorMapDepth == 16) {
+                    putRgb16(colorMap, offset, readU16LE());
                 } else if (colorMapDepth == 24) {
-                    colorMap[offset] = (byte) readU8();
+                    byte b = (byte) readU8();
                     colorMap[offset + 1] = (byte) readU8();
-                    colorMap[offset + 2] = (byte) readU8();
-                    colorMap[offset + 3] = (byte) 0xFF;
+                    colorMap[offset] = (byte) readU8();
+                    colorMap[offset + 2] = b;
                 } else if (colorMapDepth == 32) {
-                    colorMap[offset] = (byte) readU8();
+                    byte b = (byte) readU8();
                     colorMap[offset + 1] = (byte) readU8();
-                    colorMap[offset + 2] = (byte) readU8();
+                    colorMap[offset] = (byte) readU8();
+                    colorMap[offset + 2] = b;
                     colorMap[offset + 3] = (byte) readU8();
                 }
             }
         }
 
-        // Determine if origin is top or bottom
-        boolean originTop = (yOrigin & ORIGIN_TOP_LEFT) != 0;
         boolean actualFlipVertically = flipVertically || !originTop;
 
         // Decode pixel data
@@ -158,8 +175,7 @@ public class TgaDecoder implements StbDecoder {
 
         // Convert channels
         int srcChannels = channels;
-        int outChannels = (desiredChannels == 0) ?
-            (channels == 1 ? 1 : 3) : desiredChannels;
+        int outChannels = (desiredChannels == 0) ? channels : desiredChannels;
 
         ByteBuffer result = StbUtils.convertChannels(getAllocator(),output, srcChannels, width, height, outChannels, false);
 
@@ -171,13 +187,10 @@ public class TgaDecoder implements StbDecoder {
     }
 
     private void readHeader() {
-        // ID length
         int idLength = readU8();
 
-        // Color map type
-        int colorMapType = readU8();
+        colorMapType = readU8();
 
-        // Image type
         imageType = readU8();
 
         // Color map specification
@@ -192,24 +205,59 @@ public class TgaDecoder implements StbDecoder {
         height = readU16LE();
         bitsPerPixel = readU8();
 
-        // Image descriptor
         int imageDescriptor = readU8();
-        yOrigin = (imageDescriptor & 0x20) | (yOrigin & 0x20);
+        originTop = (imageDescriptor & ORIGIN_TOP_LEFT) != 0;
 
-        // Skip image ID
+        validateHeaderValues(
+            idLength,
+            colorMapType,
+            imageType,
+            colorMapLength,
+            colorMapDepth,
+            width,
+            height,
+            bitsPerPixel,
+            buffer.limit()
+        );
         buffer.position(buffer.position() + idLength);
 
-        // Determine compression
-        rleCompressed = (imageType == TYPE_RLE_RGB || imageType == TYPE_RLE_GRAY);
+        rleCompressed = (imageType == TYPE_RLE_RGB || imageType == TYPE_RLE_GRAY || imageType == TYPE_MAPPED_RGB_RLE);
+    }
+
+    private int getInfoChannels() {
+        if (imageType == TYPE_UNMAPPED_GRAY || imageType == TYPE_RLE_GRAY) {
+            return bitsPerPixel == 16 ? 2 : 1;
+        }
+        if (isColorMapped()) {
+            return getPaletteChannels();
+        }
+        if (bitsPerPixel == 15 || bitsPerPixel == 16 || bitsPerPixel == 24) {
+            return 3;
+        }
+        if (bitsPerPixel == 32) {
+            return 4;
+        }
+        throw new StbFailureException("Unsupported TGA pixel depth: " + bitsPerPixel);
+    }
+
+    private int getPaletteChannels() {
+        if (colorMapDepth == 8) {
+            return 1;
+        }
+        if (colorMapDepth == 15 || colorMapDepth == 16 || colorMapDepth == 24) {
+            return 3;
+        }
+        if (colorMapDepth == 32) {
+            return 4;
+        }
+        throw new StbFailureException("Unsupported TGA palette depth: " + colorMapDepth);
     }
 
     private ByteBuffer decodeUncompressed() {
         int outSize = StbLimits.checkedImageBufferSize(width, height, channels, 1);
         ByteBuffer output = allocator.apply(outSize);
 
-        int bytesPerPixel = (bitsPerPixel + 7) / 8;
-
-        if (imageType == TYPE_MAPPED_RGB || imageType == TYPE_MAPPED_RGB_RLE || colorMapLength > 0) {
+        if (isColorMapped()) {
             // Paletted image
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
@@ -247,6 +295,8 @@ public class TgaDecoder implements StbDecoder {
                         int val = readU16LE();
                         output.put(outPos, (byte) ((val & 0xFF)));
                         output.put(outPos + 1, (byte) ((val >> 8) & 0xFF));
+                    } else if ((bitsPerPixel == 15 || bitsPerPixel == 16) && channels == 3) {
+                        putRgb16(output, outPos, readU16LE());
                     } else if (bitsPerPixel == 24) {
                         // TGA stores as BGR
                         byte b = (byte) readU8();
@@ -305,41 +355,7 @@ public class TgaDecoder implements StbDecoder {
                 for (int i = 0; i < packetLength && pixelIndex < pixelCount; i++) {
                     int outPos = (pixelIndex / width) * width * channels + (pixelIndex % width) * channels;
 
-                    if (colorMap != null) {
-                        // Paletted - use first byte as index
-                        int idx = pixel[0] & 0xFF;
-                        int p = paletteOffsetForIndex(idx);
-                        if (p >= 0) {
-                            for (int c = 0; c < channels; c++) {
-                                output.put(outPos + c, colorMap[p + c]);
-                            }
-                        } else {
-                            for (int c = 0; c < channels; c++) {
-                                output.put(outPos + c, (byte) 0);
-                            }
-                        }
-                    } else if (bitsPerPixel == 24) {
-                        // TGA stores as BGR
-                        output.put(outPos, pixel[2]);     // R
-                        output.put(outPos + 1, pixel[1]); // G
-                        output.put(outPos + 2, pixel[0]); // B
-                    } else if (bitsPerPixel == 32) {
-                        // TGA stores as BGRA
-                        output.put(outPos, pixel[2]);     // R
-                        output.put(outPos + 1, pixel[1]); // G
-                        output.put(outPos + 2, pixel[0]); // B
-                        if (channels == 4) {
-                            output.put(outPos + 3, pixel[3]); // A
-                        }
-                    } else if (bitsPerPixel == 16) {
-                        output.put(outPos, pixel[0]);
-                        if (channels == 2) {
-                            output.put(outPos + 1, pixel[1]);
-                        }
-                    } else {
-                        // grayscale (bitsPerPixel == 8)
-                        output.put(outPos, pixel[0]);
-                    }
+                    putDecodedPixel(output, outPos, pixel);
                     pixelIndex++;
                 }
             } else {
@@ -352,40 +368,7 @@ public class TgaDecoder implements StbDecoder {
 
                     int outPos = (pixelIndex / width) * width * channels + (pixelIndex % width) * channels;
 
-                    if (colorMap != null) {
-                        int idx = pixel[0] & 0xFF;
-                        int p = paletteOffsetForIndex(idx);
-                        if (p >= 0) {
-                            for (int c = 0; c < channels; c++) {
-                                output.put(outPos + c, colorMap[p + c]);
-                            }
-                        } else {
-                            for (int c = 0; c < channels; c++) {
-                                output.put(outPos + c, (byte) 0);
-                            }
-                        }
-                    } else if (bitsPerPixel == 24) {
-                        // TGA stores as BGR
-                        output.put(outPos, pixel[2]);     // R
-                        output.put(outPos + 1, pixel[1]); // G
-                        output.put(outPos + 2, pixel[0]); // B
-                    } else if (bitsPerPixel == 32) {
-                        // TGA stores as BGRA
-                        output.put(outPos, pixel[2]);     // R
-                        output.put(outPos + 1, pixel[1]); // G
-                        output.put(outPos + 2, pixel[0]); // B
-                        if (channels == 4) {
-                            output.put(outPos + 3, pixel[3]); // A
-                        }
-                    } else if (bitsPerPixel == 16) {
-                        output.put(outPos, pixel[0]);
-                        if (channels == 2) {
-                            output.put(outPos + 1, pixel[1]);
-                        }
-                    } else {
-                        // grayscale (bitsPerPixel == 8) - RAW packet
-                        output.put(outPos, pixel[0]);
-                    }
+                    putDecodedPixel(output, outPos, pixel);
                     pixelIndex++;
                 }
             }
@@ -404,6 +387,149 @@ public class TgaDecoder implements StbDecoder {
         if (localIndex < 0 || localIndex >= colorMapLength) {
             return -1;
         }
-        return localIndex * 4;
+        return localIndex * channels;
+    }
+
+    private boolean isColorMapped() {
+        return colorMapType == 1;
+    }
+
+    private static void validateHeaderValues(
+        int idLength,
+        int colorMapType,
+        int imageType,
+        int colorMapLength,
+        int colorMapDepth,
+        int width,
+        int height,
+        int bitsPerPixel,
+        int available
+    ) {
+        if (!isPlausibleHeader(
+            idLength,
+            colorMapType,
+            imageType,
+            colorMapLength,
+            colorMapDepth,
+            width,
+            height,
+            bitsPerPixel,
+            available
+        )) {
+            throw new StbFailureException("Invalid TGA header");
+        }
+    }
+
+    private static boolean isPlausibleHeader(
+        int idLength,
+        int colorMapType,
+        int imageType,
+        int colorMapLength,
+        int colorMapDepth,
+        int width,
+        int height,
+        int bitsPerPixel,
+        int available
+    ) {
+        if (colorMapType != 0 && colorMapType != 1) {
+            return false;
+        }
+        if (width < 1 || height < 1) {
+            return false;
+        }
+        if (18 + idLength > available) {
+            return false;
+        }
+
+        if (colorMapType == 1) {
+            if (imageType != TYPE_MAPPED_RGB && imageType != TYPE_MAPPED_RGB_RLE) {
+                return false;
+            }
+            if (colorMapLength < 1) {
+                return false;
+            }
+            if (bitsPerPixel != 8 && bitsPerPixel != 16) {
+                return false;
+            }
+            return isPaletteDepthSupported(colorMapDepth);
+        }
+
+        if (imageType != TYPE_UNMAPPED_RGB && imageType != TYPE_UNMAPPED_GRAY
+            && imageType != TYPE_RLE_RGB && imageType != TYPE_RLE_GRAY) {
+            return false;
+        }
+        if (imageType == TYPE_UNMAPPED_GRAY || imageType == TYPE_RLE_GRAY) {
+            return bitsPerPixel == 8 || bitsPerPixel == 16;
+        }
+        return bitsPerPixel == 15 || bitsPerPixel == 16 || bitsPerPixel == 24 || bitsPerPixel == 32;
+    }
+
+    private static boolean isPaletteDepthSupported(int colorMapDepth) {
+        return colorMapDepth == 8 || colorMapDepth == 15 || colorMapDepth == 16
+            || colorMapDepth == 24 || colorMapDepth == 32;
+    }
+
+    private static void validatePaletteDepth(int colorMapDepth) {
+        if (!isPaletteDepthSupported(colorMapDepth)) {
+            throw new StbFailureException("Unsupported TGA palette depth: " + colorMapDepth);
+        }
+    }
+
+    private void ensureRemaining(int count) {
+        if (buffer.remaining() < count) {
+            throw new StbFailureException("Truncated TGA data");
+        }
+    }
+
+    private void putDecodedPixel(ByteBuffer output, int outPos, byte[] pixel) {
+        if (colorMap != null) {
+            int idx = (bitsPerPixel == 16)
+                ? ((pixel[0] & 0xFF) | ((pixel[1] & 0xFF) << 8))
+                : (pixel[0] & 0xFF);
+            int p = paletteOffsetForIndex(idx);
+            if (p >= 0) {
+                for (int c = 0; c < channels; c++) {
+                    output.put(outPos + c, colorMap[p + c]);
+                }
+            } else {
+                for (int c = 0; c < channels; c++) {
+                    output.put(outPos + c, (byte) 0);
+                }
+            }
+        } else if ((bitsPerPixel == 15 || bitsPerPixel == 16) && channels == 3) {
+            putRgb16(output, outPos, (pixel[0] & 0xFF) | ((pixel[1] & 0xFF) << 8));
+        } else if (bitsPerPixel == 24) {
+            output.put(outPos, pixel[2]);
+            output.put(outPos + 1, pixel[1]);
+            output.put(outPos + 2, pixel[0]);
+        } else if (bitsPerPixel == 32) {
+            output.put(outPos, pixel[2]);
+            output.put(outPos + 1, pixel[1]);
+            output.put(outPos + 2, pixel[0]);
+            output.put(outPos + 3, pixel[3]);
+        } else if (bitsPerPixel == 16) {
+            output.put(outPos, pixel[0]);
+            output.put(outPos + 1, pixel[1]);
+        } else {
+            output.put(outPos, pixel[0]);
+        }
+    }
+
+    private void putRgb16(ByteBuffer output, int outPos, int value) {
+        int r = (value >> 10) & 31;
+        int g = (value >> 5) & 31;
+        int b = value & 31;
+        output.put(outPos, (byte) ((r * 255) / 31));
+        output.put(outPos + 1, (byte) ((g * 255) / 31));
+        output.put(outPos + 2, (byte) ((b * 255) / 31));
+    }
+
+    private void putRgb16(byte[] output, int outPos, int value) {
+        int r = (value >> 10) & 31;
+        int g = (value >> 5) & 31;
+        int b = value & 31;
+        output[outPos] = (byte) ((r * 255) / 31);
+        output[outPos + 1] = (byte) ((g * 255) / 31);
+        output[outPos + 2] = (byte) ((b * 255) / 31);
     }
 }
