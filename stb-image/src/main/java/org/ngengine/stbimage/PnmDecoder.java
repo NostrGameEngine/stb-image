@@ -74,13 +74,15 @@ public class PnmDecoder implements StbDecoder {
      */
     @Override
     public StbImageInfo info() {
+        int savedPos = pos;
         try {
-            buffer.position(0);
             pos = 0;
             readHeader();
             return new StbImageInfo(width, height, channels, is16Bit, isFloat, StbImageInfo.ImageFormat.PNM);
         } catch (Exception e) {
             return null;
+        } finally {
+            pos = savedPos;
         }
     }
 

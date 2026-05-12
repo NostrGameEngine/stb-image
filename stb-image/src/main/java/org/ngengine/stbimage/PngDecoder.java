@@ -108,25 +108,38 @@ public class PngDecoder implements StbDecoder {
      */
     @Override
     public StbImageInfo info() {
-        pos = 0;
-        if (!readSignature()) {
-            return null;
-        }
-
-        while (hasRemaining()) {
-            int length = readU32BE();
-            int type = readU32BE();
-
-            if (type == PNG_CHUNK_IHDR) {
-                readIHDR();
-                return new StbImageInfo(width, height, getChannels(), bitDepth == 16, StbImageInfo.ImageFormat.PNG);
-            } else if (type == PNG_CHUNK_IEND) {
+        int savedPos = pos;
+        try {
+            pos = 0;
+            if (!readSignature()) {
                 return null;
             }
 
-            skip(length + 4); // data + CRC
+            while (hasRemaining()) {
+                int length = readU32BE();
+                int type = readU32BE();
+                if (length < 0 || pos + length + 4 > buffer.limit()) {
+                    return null;
+                }
+
+                if (type == PNG_CHUNK_IHDR) {
+                    if (length != 13) {
+                        return null;
+                    }
+                    readIHDR();
+                    return new StbImageInfo(width, height, getChannels(), bitDepth == 16, StbImageInfo.ImageFormat.PNG);
+                } else if (type == PNG_CHUNK_IEND) {
+                    return null;
+                }
+
+                skip(length + 4); // data + CRC
+            }
+            return null;
+        } catch (RuntimeException e) {
+            return null;
+        } finally {
+            pos = savedPos;
         }
-        return null;
     }
 
     /**
@@ -151,6 +164,9 @@ public class PngDecoder implements StbDecoder {
             }
 
             if (type == PNG_CHUNK_IHDR) {
+                if (length != 13) {
+                    throw new StbFailureException("Invalid IHDR chunk length");
+                }
                 readIHDR();
                 foundIHDR = true;
             } else if (type == PNG_CHUNK_CgBI) {
@@ -244,6 +260,7 @@ public class PngDecoder implements StbDecoder {
         filter = readU8();
         interlace = readU8();
 
+        StbLimits.validateDimensions(width, height);
         if (bitDepth < 1 || bitDepth > 16) {
             throw new StbFailureException("Invalid bit depth: " + bitDepth);
         }

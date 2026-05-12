@@ -70,8 +70,15 @@ public class PicDecoder implements StbDecoder {
      */
     @Override
     public StbImageInfo info() {
-        parseHeaderAndPackets(false);
-        return new StbImageInfo(width, height, srcChannels, false, StbImageInfo.ImageFormat.PIC);
+        int savedPos = pos;
+        try {
+            parseHeaderAndPackets(false);
+            return new StbImageInfo(width, height, srcChannels, false, StbImageInfo.ImageFormat.PIC);
+        } catch (RuntimeException e) {
+            return null;
+        } finally {
+            pos = savedPos;
+        }
     }
 
     /**

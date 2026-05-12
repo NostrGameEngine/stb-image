@@ -119,22 +119,24 @@ public class GifDecoder implements StbDecoder {
 
     @Override
     public StbImageInfo info() {
+        int oldPos = pos;
         try {
-            int oldPos = pos;
             pos = 0;
 
             String signature = readString(6);
             if (!signature.equals(GIF87_SIGNATURE) && !signature.equals(GIF89_SIGNATURE)) {
-                pos = oldPos;
                 return null;
             }
 
             int w = readU16LE();
             int h = readU16LE();
-            pos = oldPos;
-            return new StbImageInfo(w, h, 4, false, StbImageInfo.ImageFormat.GIF, getFrameCount());
+            width = w;
+            height = h;
+            return new StbImageInfo(width, height, 4, false, StbImageInfo.ImageFormat.GIF, getFrameCount());
         } catch (Exception e) {
             return null;
+        } finally {
+            pos = oldPos;
         }
     }
 

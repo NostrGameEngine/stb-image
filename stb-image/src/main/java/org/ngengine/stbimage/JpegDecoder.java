@@ -174,6 +174,8 @@ public class JpegDecoder implements StbDecoder {
      */
     @Override
     public StbImageInfo info() {
+        int savedPos = pos;
+        int savedMarker = marker;
         try {
             pos = 0;
             marker = MARKER_NONE;
@@ -205,13 +207,19 @@ public class JpegDecoder implements StbDecoder {
                     for (int i = 0; i < c; i++) {
                         read8(); read8(); read8();
                     }
-                    return new StbImageInfo(w, h, c, false, StbImageInfo.ImageFormat.JPEG);
+                    width = w;
+                    height = h;
+                    components = c;
+                    return new StbImageInfo(width, height, components, false, StbImageInfo.ImageFormat.JPEG);
                 }
 
                 pos = dataStart + len - 2;
             }
         } catch (Exception ignored) {
             return null;
+        } finally {
+            pos = savedPos;
+            marker = savedMarker;
         }
         return null;
     }

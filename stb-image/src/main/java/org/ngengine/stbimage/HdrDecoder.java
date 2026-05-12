@@ -52,17 +52,14 @@ public class HdrDecoder implements StbDecoder {
     @Override
     public StbImageInfo info() {
         int savedPos = pos;
-        int savedW = width;
-        int savedH = height;
         try {
+            pos = 0;
             parseHeader();
             return new StbImageInfo(width, height, 3, false, true, StbImageInfo.ImageFormat.HDR);
         } catch (RuntimeException e) {
             return null;
         } finally {
             pos = savedPos;
-            width = savedW;
-            height = savedH;
         }
     }
 
