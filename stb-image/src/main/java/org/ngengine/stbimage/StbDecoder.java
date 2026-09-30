@@ -52,7 +52,7 @@ public interface StbDecoder {
         StbImageResult result = load(desiredChannels);
         
         // prevent accidental misuse on HDR decoders since load16 doesn't make sense for them
-        if (result.isHdr()) {
+        if (result.isFloat()) {
             throw new StbFailureException("Cannot load16 from HDR data; use loadf instead");
         }
 
@@ -72,7 +72,9 @@ public interface StbDecoder {
             data16.putShort(i * 2, (short) (val | (val << 8)));
         }
 
-        data16.flip();
+        // Absolute writes do not advance position; flip() would make the buffer empty.
+        data16.limit(size16);
+        data16.position(0);
         return new StbImageResult(data16, result.getWidth(), result.getHeight(), channels, desiredChannels, true, false);
     }
 
@@ -87,7 +89,7 @@ public interface StbDecoder {
             throw new StbFailureException("cannot loadf from non-HDR images, use load or load16 instead");
         }
         StbImageResult result = load(desiredChannels);
-        if (!result.isHdr()) {
+        if (!result.isFloat()) {
             throw new StbFailureException("Decoder did not return HDR float data");
         }
         return result;

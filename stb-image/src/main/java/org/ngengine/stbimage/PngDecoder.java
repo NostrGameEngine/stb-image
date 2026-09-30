@@ -147,6 +147,19 @@ public class PngDecoder implements StbDecoder {
      */
     @Override
     public StbImageResult load(int desiredChannels) {
+        return decode(desiredChannels, false);
+    }
+
+    @Override
+    public StbImageResult load16(int desiredChannels) {
+        StbImageInfo imageInfo = info();
+        if (imageInfo != null && imageInfo.is16Bit()) {
+            return decode(desiredChannels, true);
+        }
+        return StbDecoder.super.load16(desiredChannels);
+    }
+
+    private StbImageResult decode(int desiredChannels, boolean preserve16Bit) {
         pos = 0;
         if (!readSignature()) {
             throw new StbFailureException("PNG signature not found");
@@ -229,7 +242,7 @@ public class PngDecoder implements StbDecoder {
         ByteBuffer result = StbUtils.convertChannels(getAllocator(), imageData, srcChannels, width, height, desiredChannels, bitDepth == 16);
 
         boolean output16 = bitDepth == 16;
-        if (output16) {
+        if (output16 && !preserve16Bit) {
             result = convert16To8(result, width, height, desiredChannels);
             output16 = false;
         }

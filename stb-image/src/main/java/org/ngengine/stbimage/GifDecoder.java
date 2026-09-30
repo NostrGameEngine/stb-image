@@ -674,7 +674,7 @@ public class GifDecoder implements StbDecoder {
             source.getChannels(),
             desiredChannels,
             source.is16Bit(),
-            source.isHdr(),
+            source.isFloat(),
             frameIndex
         );
     }

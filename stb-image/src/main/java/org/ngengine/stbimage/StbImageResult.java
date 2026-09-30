@@ -58,7 +58,7 @@ public class StbImageResult {
     /**
      * Gets the raw pixel data as a ByteBuffer.
      * For 8-bit images: each channel is 1 byte.
-     * For 16-bit images: each channel is 2 bytes (big-endian).
+     * For 16-bit images: each channel is 2 bytes, in the buffer's byte order.
      * For HDR images: each channel is 4 bytes (float).
      *
      * Pixel format is interleaved: R, G, B, A, R, G, B, A...

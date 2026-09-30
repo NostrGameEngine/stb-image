@@ -70,6 +70,7 @@ try {
 > [!NOTE]
 > The Java package namespace was intentionally changed to `org.ngengine.stbimage`, in order to avoid collisions with other stb_image implementations.
 
+
 ## Unit tests and parity checks
 
 This repo includes a [large collection of reference images](stb-image/src/test/resources/testData/image), covering a wide range of formats, features, and edge cases. The unit tests check also for pixel parity with images decoded with the [original stb_image C library (v2.30) included in this repo](stb-image/src/test/c/). 
@@ -100,4 +101,3 @@ Then run the tests with
 ## License 
 
 [Public Domain](LICENSE) or [BSD-3-Clause](LICENSE-alt), which one you prefer.
-

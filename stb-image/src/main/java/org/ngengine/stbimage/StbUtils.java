@@ -26,7 +26,7 @@ public final class StbUtils {
         int srcSize = StbLimits.checkedImageBufferSize(width, height, srcChannels, bytesPerChannel);
         int dstSize = StbLimits.checkedImageBufferSize(width, height, desiredChannels, bytesPerChannel);
 
-        ByteBuffer in = src.duplicate();
+        ByteBuffer in = src.duplicate().order(src.order());
         in.position(0);
         if (in.remaining() < srcSize) {
             throw new StbFailureException("Not enough source data for channel conversion");
