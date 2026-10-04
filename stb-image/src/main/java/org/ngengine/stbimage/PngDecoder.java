@@ -116,11 +116,10 @@ public class PngDecoder implements StbDecoder {
             }
 
             while (hasRemaining()) {
+                requireRemaining(8); // length + type
                 int length = readU32BE();
                 int type = readU32BE();
-                if (length < 0 || pos + length + 4 > buffer.limit()) {
-                    return null;
-                }
+                validateChunkLength(length);
 
                 if (type == PNG_CHUNK_IHDR) {
                     if (length != 13) {
@@ -132,7 +131,8 @@ public class PngDecoder implements StbDecoder {
                     return null;
                 }
 
-                skip(length + 4); // data + CRC
+                skip(length);
+                skip(4); // CRC
             }
             return null;
         } catch (RuntimeException e) {
@@ -166,15 +166,15 @@ public class PngDecoder implements StbDecoder {
         }
 
         boolean foundIHDR = false;
+        boolean foundIEND = false;
         boolean isIphonePng = false;
-        ByteArrayOutputStream idat = new ByteArrayOutputStream(8192);
+        int idatSize = 0;
 
         while (hasRemaining()) {
+            requireRemaining(8); // length + type
             int length = readU32BE();
             int type = readU32BE();
-            if (length < 0 || pos + length + 4 > buffer.limit()) {
-                throw new StbFailureException("Corrupt PNG chunk length");
-            }
+            validateChunkLength(length);
 
             if (type == PNG_CHUNK_IHDR) {
                 if (length != 13) {
@@ -193,13 +193,13 @@ public class PngDecoder implements StbDecoder {
                 if (!foundIHDR) {
                     throw new StbFailureException("IDAT before IHDR");
                 }
-                byte[] tmp = new byte[length];
-                ByteBuffer chunk = buffer.duplicate();
-                chunk.position(pos);
-                chunk.get(tmp, 0, length);
-                idat.write(tmp, 0, length);
-                pos += length;
+                idatSize = checkedIdatSize(idatSize, length);
+                skip(length);
             } else if (type == PNG_CHUNK_IEND) {
+                if (length != 0) {
+                    throw new StbFailureException("Invalid IEND chunk length");
+                }
+                foundIEND = true;
                 break;
             } else {
                 skip(length);
@@ -212,14 +212,17 @@ public class PngDecoder implements StbDecoder {
             throw new StbFailureException("No IHDR chunk found");
         }
 
-        byte[] idatBytes = idat.toByteArray();
-        if (idatBytes.length == 0) {
+        if (!foundIEND) {
+            throw new StbFailureException("No IEND chunk found");
+        }
+        if (idatSize == 0) {
             throw new StbFailureException("No IDAT chunk found");
         }
+        byte[] idatBytes = copyIdatData(idatSize);
 
         // Decompress
         int maxInflated = estimateInflatedUpperBound();
-        ByteBuffer decompressed = decompress(ByteBuffer.wrap(idatBytes), isIphonePng, maxInflated);
+        ByteBuffer decompressed = decompress(idatBytes, isIphonePng, maxInflated);
 
         // Decode image data
         ByteBuffer imageData = (interlace == 1)
@@ -255,6 +258,9 @@ public class PngDecoder implements StbDecoder {
     }
 
     private boolean readSignature() {
+        if (buffer.limit() - pos < 8) {
+            return false;
+        }
         byte[] sig = new byte[] {(byte)0x89, (byte)0x50, (byte)0x4E, (byte)0x47, (byte)0x0D, (byte)0x0A, (byte)0x1A, (byte)0x0A};
         for (byte b : sig) {
             if (readU8() != (b & 0xFF)) {
@@ -311,11 +317,17 @@ public class PngDecoder implements StbDecoder {
             }
             skip(length - transparency.length);
         } else if (colorType == CT_GREY) {
+            if (length != 2) {
+                throw new StbFailureException("Invalid grayscale tRNS chunk length");
+            }
             transparency = new byte[2];
             transparency[0] = (byte) readU8();
             transparency[1] = (byte) readU8();
             skip(length - 2);
         } else if (colorType == CT_RGB) {
+            if (length != 6) {
+                throw new StbFailureException("Invalid RGB tRNS chunk length");
+            }
             transparency = new byte[6];
             for (int i = 0; i < 6; i++) {
                 transparency[i] = (byte) readU8();
@@ -326,12 +338,55 @@ public class PngDecoder implements StbDecoder {
         }
     }
 
-    private ByteBuffer decompress(ByteBuffer compressed, boolean rawDeflate, int maxOutputBytes) {
+    // The first pass validates every chunk and the aggregate size before allocating
+    // compressed storage. A second pass copies IDAT payloads without per-chunk arrays
+    // or an unchecked ByteArrayOutputStream capacity expansion.
+    private byte[] copyIdatData(int size) {
+        checkedIdatSize(0, size);
+        byte[] compressed = new byte[size];
+        int copied = 0;
+        pos = 8;
+        while (hasRemaining()) {
+            requireRemaining(8);
+            int length = readU32BE();
+            int type = readU32BE();
+            validateChunkLength(length);
+            if (type == PNG_CHUNK_IEND) {
+                break;
+            }
+            if (type == PNG_CHUNK_IDAT) {
+                if (length > size - copied) {
+                    throw new StbFailureException("PNG IDAT size changed during decode");
+                }
+                ByteBuffer chunk = buffer.duplicate();
+                chunk.position(pos);
+                chunk.get(compressed, copied, length);
+                copied += length;
+            }
+            skip(length);
+            skip(4);
+        }
+        if (copied != size) {
+            throw new StbFailureException("PNG IDAT size changed during decode");
+        }
+        return compressed;
+    }
+
+    static int checkedIdatSize(int currentSize, int chunkLength) {
+        long total = (long) currentSize + chunkLength;
+        if (currentSize < 0 || chunkLength < 0 || total > Integer.MAX_VALUE) {
+            throw new StbFailureException("PNG IDAT size overflow");
+        }
+        if (total > 0) {
+            StbLimits.checkMaxSingleAllocationBytes(total);
+            StbLimits.checkMaxTotalAllocationPerDecodeBytes(total);
+        }
+        return (int) total;
+    }
+
+    private ByteBuffer decompress(byte[] compressed, boolean rawDeflate, int maxOutputBytes) {
         Inflater inflater = new Inflater(rawDeflate);
-        compressed.rewind();
-        byte[] input = new byte[compressed.remaining()];
-        compressed.get(input);
-        inflater.setInput(input);
+        inflater.setInput(compressed);
 
         StbLimits.checkMaxSingleAllocationBytes(maxOutputBytes);
 
@@ -879,10 +934,12 @@ public class PngDecoder implements StbDecoder {
     }
 
     private int readU8() {
+        requireRemaining(1);
         return buffer.get(pos++) & 0xFF;
     }
 
     private int readU32BE() {
+        requireRemaining(4);
         int b0 = buffer.get(pos++) & 0xFF;
         int b1 = buffer.get(pos++) & 0xFF;
         int b2 = buffer.get(pos++) & 0xFF;
@@ -891,7 +948,21 @@ public class PngDecoder implements StbDecoder {
     }
 
     private void skip(int n) {
+        requireRemaining(n);
         pos += n;
+    }
+
+    private void requireRemaining(int n) {
+        if (n < 0 || pos < 0 || pos > buffer.limit() || n > buffer.limit() - pos) {
+            throw new StbFailureException("Truncated PNG data");
+        }
+    }
+
+    private void validateChunkLength(int length) {
+        int remaining = buffer.limit() - pos;
+        if (length < 0 || remaining < 4 || length > remaining - 4) {
+            throw new StbFailureException("Corrupt PNG chunk length");
+        }
     }
 
     private boolean hasRemaining() {
